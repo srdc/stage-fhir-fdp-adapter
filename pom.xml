@@ -1,0 +1,176 @@
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>io.onfhir.example</groupId>
+  <artifactId>stage-fhir-fdp-adapter_2.13</artifactId>
+  <version>1.0.0</version>
+
+  <properties>
+    <maven.compiler.source>11</maven.compiler.source>
+    <maven.compiler.target>11</maven.compiler.target>
+    <scala.version>2.13.16</scala.version>
+    <scala.binary.version>2.13</scala.binary.version>
+    <spark.version>3.5.4</spark.version>
+    <commons-io.version>2.16.1</commons-io.version>
+    <jena.version>4.10.0</jena.version>
+    <poi.version>5.3.0</poi.version>
+  </properties>
+
+  <!-- Lock commons-io so transitive deps cannot downgrade it -->
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>commons-io</groupId>
+        <artifactId>commons-io</artifactId>
+        <version>${commons-io.version}</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+
+    <dependency>
+      <groupId>io.onfhir</groupId>
+      <artifactId>onfhir-feast-common</artifactId>
+      <version>1.2-SNAPSHOT</version>
+    </dependency>
+
+    <!-- Spark -->
+    <dependency>
+      <groupId>org.apache.spark</groupId>
+      <artifactId>spark-sql_2.13</artifactId>
+      <version>${spark.version}</version>
+    </dependency>
+
+    <!-- Spark-on-FHIR SDK-->
+    <dependency>
+      <groupId>io.onfhir.spark</groupId>
+      <artifactId>spark-on-fhir-sdk_2.13</artifactId>
+      <version>1.2-SNAPSHOT</version>
+    </dependency>
+
+    <!-- Ensure Scala runtime is present -->
+    <dependency>
+      <groupId>org.scala-lang</groupId>
+      <artifactId>scala-library</artifactId>
+      <version>${scala.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.github.scopt</groupId>
+      <artifactId>scopt_2.13</artifactId>
+      <version>4.1.0</version>
+    </dependency>
+
+    <!-- Core Jena framework -->
+    <dependency>
+      <groupId>org.apache.jena</groupId>
+      <artifactId>apache-jena-libs</artifactId>
+      <version>${jena.version}</version>
+      <type>pom</type>
+    </dependency>
+
+    <!-- Jena RIOT (for RDFDataMgr, reading/writing RDF formats like TTL) -->
+    <dependency>
+      <groupId>org.apache.jena</groupId>
+      <artifactId>jena-arq</artifactId>
+      <version>${jena.version}</version>
+    </dependency>
+
+    <!-- Jena Core vocabulary and model APIs -->
+    <dependency>
+      <groupId>org.apache.jena</groupId>
+      <artifactId>jena-core</artifactId>
+      <version>${jena.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.poi</groupId>
+      <artifactId>poi</artifactId>
+      <version>${poi.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.poi</groupId>
+      <artifactId>poi-ooxml</artifactId>
+      <version>${poi.version}</version>
+    </dependency>
+
+
+  </dependencies>
+
+  <build>
+    <sourceDirectory>src/main/scala</sourceDirectory>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.4.1</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
+                  <resource>reference.conf</resource>
+                </transformer>
+
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>StageDatasetFactory</mainClass>
+                </transformer>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+              </transformers>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- your scala-maven-plugin stays as before -->
+      <plugin>
+        <groupId>net.alchim31.maven</groupId>
+        <artifactId>scala-maven-plugin</artifactId>
+        <version>4.8.1</version>
+        <executions>
+          <execution>
+            <id>compile-scala</id>
+            <goals><goal>compile</goal></goals>
+          </execution>
+          <execution>
+            <id>compile-test-scala</id>
+            <goals><goal>testCompile</goal></goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- simple runnable “script” via mvn exec -->
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.3.0</version>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.3.0</version>
+        <configuration>
+          <archive>
+            <manifest>
+              <mainClass>PatientCsvExports</mainClass>
+            </manifest>
+          </archive>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>
