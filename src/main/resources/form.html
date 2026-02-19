@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>HealthDCAT-AP Configuration</title>
+    <style>
+        html { font-family: Arial, Helvetica, sans-serif; }
+        form .field { padding: .5em 1em; display: flex; flex-wrap: wrap; flex-grow: 1; flex-basis: 100%; max-width: calc(100% - 2em); }
+        form .field label { min-width: 20em; margin-bottom: .5em; font-weight: bold; }
+        form .field label:has(+ .field) { flex-grow: 1; flex-basis: 100%; }
+        form .field label + *:not([type=checkbox]) { flex-grow: 1; max-width: 100%; }
+        form > .field:nth-child(even) { background: #f0f0f0; }
+        form > .field > label { padding: 0; }
+        form .field input:not([type=checkbox]), form .field select, form .field textarea { padding: .3em; border: 1px solid #d0d0d0; border-radius: .25em; }
+        .info { background: #c3defa; border: 1px solid #153860; color: #153860; padding: 1em; border-radius: .5em; }
+        form .field button { padding: .5em 1em; border-radius: .25em; border: 1px solid #286015; background: #3a8121; color: white; font-size: 1.1rem; }
+        form .field label .desc { font-size: .9em; color: #555555; font-weight: lighter; display: block; }
+        form .field.hidden { display: none; }
+        h2 { border-bottom: 2px solid #333; padding-bottom: 0.5rem; margin-top: 2rem; }
+    </style>
+</head>
+<body>
+<p class="info">Fill the form below and submit to proceed with RDF metadata extraction.</p>
+<form method="post" action="/form">
+
+    <h2>Technical & FDP Configuration</h2>
+    <div class="field">
+        <label>FDP URL</label>
+        <input type="url" name="fdpUrl" value="{{fdp-url}}">
+    </div>
+    <div class="field">
+        <label>FDP Email</label>
+        <input type="email" name="fdpEmail" value="{{fdp-email}}">
+    </div>
+    <div class="field">
+        <label>FDP Password</label>
+        <input type="password" name="fdpPassword" value="{{fdp-password}}">
+    </div>
+    <div class="field">
+        <label>Output Directory<i style="color: red">*</i></label>
+        <input name="outputDir" required value="{{output-dir}}">
+    </div>
+
+    <h2>Catalog</h2>
+    <div class="field">
+        <label>Existing?</label>
+        <input onchange="toggleExisting(this.checked)" type="checkbox" name="existingCatalog">
+    </div>
+    <div class="field hidden existing-catalog-field required">
+        <label>URI</label>
+        <input name="catalogUri" value="{{catalog-uri}}">
+    </div>
+    <div class="field new-catalog-field required">
+        <label>Title<i style="color: red">*</i></label>
+        <input name="catalogTitle" required value="{{catalog-title}}">
+    </div>
+    <div class="field new-catalog-field required">
+        <label>Description<i style="color: red">*</i></label>
+        <textarea required name="catalogDescription">{{catalog-description}}</textarea>
+    </div>
+    <div class="field new-catalog-field required">
+        <label>Applicable Legislation<i style="color: red">*</i></label>
+        <input name="catalogApplicableLegislation" required value="{{catalog-applicable-legislation}}">
+    </div>
+    <div class="field new-catalog-field">
+        <label>Spatial Coverage (Catalog)</label>
+        <select name="catalogSpatial">
+            {{countryOptions}}
+        </select>
+    </div>
+    <div class="field new-catalog-field">
+        <label>Start Date</label>
+        <input type="date" name="catalogStartDate" value="{{catalog-start-date}}">
+    </div>
+    <div class="field new-catalog-field">
+        <label>End Date</label>
+        <input type="date" name="catalogEndDate" value="{{catalog-end-date}}">
+    </div>
+
+    <h2>Dataset</h2>
+    <div class="field">
+        <label>Title<i style="color: red">*</i></label>
+        <input name="title" required value="{{title}}">
+    </div>
+    <div class="field">
+        <label>Version</label>
+        <input name="datasetVersion" value="{{dataset-version}}">
+    </div>
+    <div class="field">
+        <label>Description<i style="color: red">*</i></label>
+        <textarea required name="description">{{description}}</textarea>
+    </div>
+    <div class="field">
+        <label>Quality Annotation<i style="color: red">*</i></label>
+        <textarea name="datasetQualityAnnotation">{{dataset-quality-annotation}}</textarea>
+    </div>
+    <div class="field">
+        <label>Theme<i style="color: red">*</i></label>
+        <select name="theme" required value="{{theme}}">{{themeOptions}}</select>
+    </div>
+    <div class="field">
+        <label>Provenance<i style="color: red">*</i></label>
+        <textarea name="provenance" required>{{provenance}}</textarea>
+    </div>
+    <div class="field">
+        <label>
+            Keyword(s)<i style="color: red">*</i>
+            <span class="desc">Comma separated keywords</span>
+        </label>
+        <input name="keyword" value="{{keyword}}">
+    </div>
+    <div class="field">
+        <label>Geographical Coverage<i style="color: red">*</i></label>
+        <select name="datasetSpatial" required>
+            {{countryOptions}}
+        </select>
+    </div>
+    <div class="field">
+        <label>Temporal Coverage Start</label>
+        <input type="date" name="datasetTemporalStart" value="{{dataset-temporal-start}}">
+    </div>
+    <div class="field">
+        <label>Temporal Coverage End</label>
+        <input type="date" name="datasetTemporalEnd" value="{{dataset-temporal-end}}">
+    </div>
+    <div class="field">
+        <label>Population Coverage</label>
+        <input name="populationCoverage" value="{{population-coverage}}">
+    </div>
+    <div class="field">
+        <label>Update Frequency</label>
+        <select name="datasetFrequency">
+            <option></option>
+            {{frequencyOptions}}
+        </select>
+    </div>
+    <div class="field">
+        <label>Identifier<i style="color: red">*</i></label>
+        <input name="identifier" value="{{identifier}}">
+    </div>
+    <div class="field">
+        <label>Contact Point<i style="color: red">*</i></label>
+        <div class="field">
+            <label>Page</label>
+            <input type="url" name="contactPage" value="{{contact-page}}">
+        </div>
+        <div class="field">
+            <label>Email</label>
+            <input type="email" name="contactEmail" value="{{contact-email}}">
+        </div>
+    </div>
+
+    <div class="field">
+        <label>Publisher (Data Holder)<i style="color: red">*</i></label>
+        <div class="field">
+            <label>Name<i style="color: red">*</i></label>
+            <input name="publisherName" value="{{publisher-name}}">
+        </div>
+        <div class="field">
+            <label>Type</label>
+            <select name="publisherType">
+                <option></option>
+                {{hdabTypeOptions}}
+            </select>
+        </div>
+        <div class="field">
+            <label>Contact Point</label>
+            <div class="field">
+                <label>Page</label>
+                <input type="url" name="publisherPage" value="{{publisher-page}}">
+            </div>
+            <div class="field">
+                <label>Email</label>
+                <input type="email" name="publisherEmail" value="{{publisher-email}}">
+            </div>
+        </div>
+        <div class="field">
+            <label>Trusted data holder</label>
+            <input type="checkbox" name="publisherTrusted" {{publisherTrustedChecked}}>
+        </div>
+    </div>
+
+    <div class="field">
+        <label>Health Data Access Body<i style="color: red">*</i></label>
+        <div class="field">
+            <label>Name<i style="color: red">*</i></label>
+            <input name="hdabName" value="{{hdab-name}}">
+        </div>
+        <div class="field">
+            <label>Type</label>
+            <select name="hdabType">
+                <option></option>
+                {{hdabTypeOptions}}
+            </select>
+        </div>
+        <div class="field">
+            <label>Contact Point</label>
+            <div class="field">
+                <label>Page</label>
+                <input type="url" name="hdabContactPage" value="{{hdab-contact-page}}">
+            </div>
+            <div class="field">
+                <label>Email</label>
+                <input type="email" name="hdabContactEmail" value="{{hdab-contact-email}}">
+            </div>
+        </div>
+        <div class="field">
+            <label>Note</label>
+            <textarea name="hdabNote">{{hdab-note}}</textarea>
+        </div>
+        <div class="field">
+            <label>Trusted data holder</label>
+            <input type="checkbox" name="hdabTrusted" {{hdabTrustedChecked}}>
+        </div>
+    </div>
+
+    <div class="field">
+        <label>Applicable Legislation<i style="color: red">*</i></label>
+        <input name="applicableLegislation" required value="{{applicable-legislation}}">
+    </div>
+    <div class="field">
+        <label>Access Rights<i style="color: red">*</i></label>
+        <select name="accessRights" value="{{access-rights}}" required>
+            {{accessRightsOptions}}
+        </select>
+    </div>
+    <div class="field">
+        <label>Type<i style="color: red">*</i></label>
+        <select name="type" value="{{type}}" required>
+            {{typeOptions}}
+        </select>
+    </div>
+    <div class="field">
+        <label>Health Category<i style="color: red">*</i></label>
+        <select name="healthCategory" required>
+            {{healthCategoryOptions}}
+        </select>
+    </div>
+    <div class="field">
+        <label>Health Theme<i style="color: red">*</i></label>
+        <select name="healthTheme" required>
+            {{healthThemeOptions}}
+        </select>
+    </div>
+
+    <h2>Distribution</h2>
+    <div class="field">
+        <label>Access URL<i style="color: red">*</i></label>
+        <input required type="url" name="distributionAccessUrl" value="{{distribution-access-url}}">
+    </div>
+    <div class="field">
+        <label>License<i style="color: red">*</i></label>
+        <input name="distributionLicense" value="{{distribution-license}}">
+    </div>
+    <div class="field">
+        <label>Applicable Legislation<i style="color: red">*</i></label>
+        <input required name="distributionApplicableLegislation" value="{{distribution-applicable-legislation}}">
+    </div>
+    <div class="field">
+        <label>Format</label>
+        <select name="distributionFormat" value="{{distribution-format}}">
+            <option></option>
+            {{fileTypeOptions}}
+        </select>
+    </div>
+    <div class="field">
+        <label>Description</label>
+        <input name="distributionDescription" value="{{distribution-description}}">
+    </div>
+
+    <h3>Sample Distribution</h3>
+    <div class="field">
+        <label>Sample Title</label>
+        <input name="sampleTitle" value="{{sample-title}}">
+    </div>
+    <div class="field">
+        <label>Sample Access URL</label>
+        <input type="url" name="sampleAccessUrl" value="{{sample-access-url}}">
+    </div>
+    <div class="field">
+        <label>Sample Format</label>
+        <select name="sampleFormat" value="{{sample-format}}">
+            <option></option>
+            {{fileTypeOptions}}
+        </select>
+    </div>
+    <div class="field">
+        <label>Sample Legislation</label>
+        <input name="sampleLegislation" value="{{sample-legislation}}">
+    </div>
+
+    <div class="field" style="flex-direction: row-reverse">
+        <button type="submit">Submit</button>
+    </div>
+</form>
+<script>
+    function toggleExisting(value) {
+        const toHide = value ? document.querySelectorAll(".new-catalog-field") : document.querySelectorAll(".existing-catalog-field");
+        const toShow = !value ? document.querySelectorAll(".new-catalog-field") : document.querySelectorAll(".existing-catalog-field");
+        toShow.forEach(item => {
+            item.classList.remove('hidden')
+            if (item.classList.contains('required')) {
+                item.querySelectorAll('input,textarea').forEach(input => input.setAttribute('required', true))
+            }
+        });
+        toHide.forEach(item => {
+            item.classList.add('hidden');
+            item.querySelectorAll('input,textarea').forEach(input => input.removeAttribute('required'))
+        });
+    }
+
+    document.querySelectorAll('select').forEach(select => {
+        if (select.getAttribute('value')) {
+            select.querySelectorAll('option').forEach(option => {
+                if (option.value === select.getAttribute("value")) {
+                    option.selected = true;
+                }
+            })
+        }
+    })
+</script>
+</body>
+</html>
