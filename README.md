@@ -49,21 +49,31 @@ mvn -DskipTests clean package
 
 ---
 
-##  Configuration
+## Configuration
 
-You can configure the pipeline using either a JSON file or an Excel spreadsheet. This file controls the inputs (FHIR URL), outputs (DCAT metadata), and behavior.
+The project strictly separates technical application configuration from domain-specific metadata to allow for seamless environment setups.
 
-### 1. Configure Data Source & Metadata
+### 1. Application Configuration (`application.conf`)
 
-Edit `config.json` (or `config.xlsx`) to define your target FHIR server and metadata properties.
+Technical settings—such as server connections, credentials, and file paths—are provided via the `application.conf` file (typically located in `src/main/resources/application.conf`).
 
 | Parameter | Description |
 | --- | --- |
 | `fhirUrl` | Base URL of the source FHIR server. |
 | `fdpUrl` | (Optional) URL of the target FAIR Data Point. |
-| `catalogTitle` | Title of the Data Catalog to be created. |
-| `datasetTitle` | Title of the specific Dataset. |
-| `outputDir` | Local directory to save CSV and TTL files. |
+| `fdpEmail` | (Optional) Email for FDP authentication. |
+| `fdpPassword` | (Optional) Password for FDP authentication. |
+| `outputDir` | Local directory to save the extracted CSV and generated `.ttl` files. |
+| `jsonPath` | Path to the metadata JSON file (used if `runMode=json`). |
+| `excelPath` | Path to the metadata Excel file (used if `runMode=excel`). |
+
+### 2. Configure Run Mode (Metadata)
+
+Descriptive FAIR metadata (Catalog details, Publisher, Access Rights, etc.) is ingested based on the selected `runMode`. Dynamic statistics (like patient age ranges and temporal coverage) are automatically extracted from FHIR unless overridden by the static configuration.
+
+* **`browser`** (Default): Launches a local web server and opens a UI form in your browser to input metadata dynamically.
+* **`json`**: Automatically loads metadata from the configured `config.json` file.
+* **`excel`**: Automatically loads metadata from the configured `config.xlsx` file.
 
 ### 2. Configure Run Mode
 
@@ -80,17 +90,25 @@ The application supports different ways to load these configurations:
 Use the provided shell script to submit the Spark job. You can customize the job type, output format, and configuration mode via CLI arguments.
 
 ```bash
-./run-cli.sh --job survey --format csv --runMode browser
+./run-cli.sh (optional CLI arguments can be seen below)
 
 ```
-
 ### CLI Arguments
+
+You can customize the job type, output format, configuration mode, and directly override any `application.conf` settings via CLI arguments.
 
 | Argument | Default | Description |
 | --- | --- | --- |
 | `--job` | `survey` | The ETL pipeline to run. Currently supports `survey` (Healthy Aging). Can be extended for other cohorts. |
 | `--format` | `csv` | The output format for the patient data (`csv` or `parquet`). |
-| `--runMode` | `browser` | How the app loads configuration (`json`, `excel`, or `browser`). |
+| `--runMode` | `browser` | How the app loads metadata configuration (`json`, `excel`, or `browser`). |
+| `--fhirUrl` | *(from conf)* | Override the source FHIR server URL. |
+| `--fdpUrl` | *(from conf)* | Override the target FAIR Data Point URL. |
+| `--fdpEmail` | *(from conf)* | Override the FDP authentication email. |
+| `--fdpPassword`| *(from conf)* | Override the FDP authentication password. |
+| `--outputDir` | *(from conf)* | Override the output directory for generated files. |
+| `--jsonPath` | *(from conf)* | Override the path to the `config.json` file. |
+| `--excelPath` | *(from conf)* | Override the path to the `config.xlsx` file. |
 
 ---
 
