@@ -1,0 +1,10 @@
+dependency-reduced-pom.xml
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.idea/
+.vscode/
+target/
+.env
+.env.*
