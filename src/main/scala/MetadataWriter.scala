@@ -15,6 +15,9 @@ import java.util.UUID
  * @param maxAge         Maximum age of patients found in the cohort.
  * @param columns        Array of column name and type pairs, used for CSVW schema generation.
  * @param vocabularies   Map of question/variable IDs to their code-display value pairs (for SKOS).
+ * @param startDate      Dynamically extracted earliest date from the dataset entries.
+ * @param endDate        Dynamically extracted latest date from the dataset entries.
+ * @param codingSystems  Dynamically extracted list of unique coding systems found in the dataset.
  */
 case class DatasetStats(
                          recordCount: Long,
@@ -22,7 +25,10 @@ case class DatasetStats(
                          minAge: Int,
                          maxAge: Int,
                          columns: Array[(String, String)],
-                         vocabularies: Map[String, Map[String, String]] = Map.empty
+                         vocabularies: Map[String, Map[String, String]] = Map.empty,
+                         startDate: Option[String] = None,
+                         endDate: Option[String] = None,
+                         codingSystems: Seq[String] = Seq.empty
                        )
 
 /**
@@ -47,6 +53,7 @@ object MetadataWriter {
   private val DQV_NS = "http://www.w3.org/ns/dqv#"
 
   private val MEDIA_TYPE_EXTENT = "http://purl.org/dc/terms/MediaTypeOrExtent"
+  private val MEDIA_TYPE = "http://purl.org/dc/terms/MediaType"
   private val LEGAL_RESOURCE = "http://data.europa.eu/eli/ontology#LegalResource"
   private val DATASET_TYPE_STATISTICAL = "http://publications.europa.eu/resource/authority/dataset-type/STATISTICAL"
   private val DATA_THEME_HEALTH = "http://publications.europa.eu/resource/authority/data-theme/HEAL"
@@ -77,7 +84,6 @@ object MetadataWriter {
 
   /**
    * Helper to create the main Subject resource for an RDF model.
-   *
    * If the URI is empty or null, it creates a resource with a relative URI ("<>").
    *
    * @param m   The Jena Model.
@@ -85,8 +91,17 @@ object MetadataWriter {
    * @return The created Resource.
    */
   private def createSubject(m: Model, uri: String): Resource = {
-    if (uri == null || uri.trim.isEmpty) m.createResource("")
-    else m.createResource(uri)
+    if (uri == null || uri.trim.isEmpty) m.createResource("") else m.createResource(uri)
+  }
+
+  /** * Prevents invalid URI characters (like spaces) from breaking the Turtle Parser.
+   * * @param m      The Jena Model.
+   * @param uriStr The raw URI string to sanitize.
+   * @return The sanitized Jena Resource.
+   */
+  private def safeRes(m: Model, uriStr: String): Resource = {
+    val cleaned = uriStr.trim.replaceAll("\\s+", "%20").replaceAll("[<>\"{}|\\\\^`]", "")
+    m.createResource(cleaned)
   }
 
   /**
@@ -102,16 +117,19 @@ object MetadataWriter {
    *
    * All generated models are also saved as Turtle (.ttl) files in the output directory.
    *
-   * @param cfg   The configuration object containing metadata fields and FDP settings.
-   * @param stats The calculated statistics from the ETL pipeline.
+   * @param outputDir   The local directory path to output the TTL files.
+   * @param fdpUrl      The FAIR Data Point URL.
+   * @param fdpEmail    The authentication email for the FAIR Data Point.
+   * @param fdpPassword The authentication password for the FAIR Data Point.
+   * @param meta        The configuration object containing metadata fields.
+   * @param stats       The calculated statistics from the ETL pipeline.
+   * @param runMode     The mode the application is running in (JSON, Excel, or Browser).
    */
-  def exportResults(cfg: Config, stats: DatasetStats): Unit = {
+  def exportResults(outputDir: String, fdpUrl: String, fdpEmail: String, fdpPassword: String, meta: ConfigLoader, stats: DatasetStats, runMode: String): Unit = {
     println(s"Starting Metadata Export...")
 
-    // 1. Sanitize Inputs to determine Mode
-    val fdpUrl = Option(cfg.fdpUrl).map(_.trim).getOrElse("")
-    val fdpEmail = Option(cfg.fdpEmail).map(_.trim).getOrElse("")
-    val isFdpMode = fdpUrl.nonEmpty && fdpEmail.nonEmpty
+    val isFdpMode = fdpUrl.trim.nonEmpty && fdpEmail.trim.nonEmpty
+    val outDir = Paths.get(outputDir)
 
     if (isFdpMode) {
       println(s"FDP Mode ACTIVE. Target: $fdpUrl")
@@ -119,78 +137,62 @@ object MetadataWriter {
       println("FDP Mode INACTIVE (Missing URL or Email). Switching to LOCAL FILE generation with auto-generated UUIDs.")
     }
 
-    // 2. Ensure Output Directory Exists
-    val outDir = Paths.get(cfg.outputDir)
     if (!Files.exists(outDir)) {
-      println(s"Creating output directory: ${cfg.outputDir}")
+      println(s"Creating output directory: $outputDir")
       Files.createDirectories(outDir)
     }
 
-    // CATALOG
-    val finalCatalogUri: String = if (isFdpMode) {
-      // FDP Mode: Check existing or create new via POST
-      val providedUriMatchesServer = cfg.catalogUri.startsWith(fdpUrl)
-      if (cfg.catalogIsExisting && providedUriMatchesServer) {
-        println(s"Using Existing Valid FDP Catalog URI: ${cfg.catalogUri}")
-        val model = createCatalogModel(cfg, cfg.catalogUri, isFdpMode)
-        saveLocalFile(cfg, "Catalog", model)
-        cfg.catalogUri
-      } else {
-        println("Creating NEW Catalog on FDP...")
-        val model = createCatalogModel(cfg, "", isFdpMode)
-        saveLocalFile(cfg, "Catalog", model)
-        val loc = postToFdp(cfg, "catalog", model)
-        println(s"Catalog confirmed at: $loc")
-        loc
-      }
+    // 1. Catalog
+    val configuredCatalogUri = meta.catalog.uri.getOrElse("")
+    val finalCatalogUri: String = if (isFdpMode && meta.catalog.existing.contains(true) && configuredCatalogUri.startsWith(fdpUrl)) {
+      println(s"Using Existing Valid FDP Catalog URI: $configuredCatalogUri")
+      val model = createCatalogModel(meta, stats, configuredCatalogUri, isFdpMode, fdpUrl, runMode)
+      saveLocalFile(outputDir, "Catalog", model)
+      configuredCatalogUri
+    } else if (isFdpMode) {
+      println("Creating NEW Catalog on FDP...")
+      val model = createCatalogModel(meta, stats, "", isFdpMode, fdpUrl, runMode)
+      saveLocalFile(outputDir, "Catalog", model)
+      val loc = postToFdp(fdpUrl, fdpEmail, fdpPassword, "catalog", model)
+      println(s"Catalog confirmed at: $loc")
+      loc
     } else {
-      // Local Mode: Use existing URI if provided, otherwise mint a UUID
-      val uri = if (cfg.catalogIsExisting && cfg.catalogUri.trim.nonEmpty) cfg.catalogUri.trim else s"urn:uuid:${UUID.randomUUID()}"
+      val uri = if (meta.catalog.existing.contains(true) && configuredCatalogUri.trim.nonEmpty) configuredCatalogUri.trim else s"urn:uuid:${UUID.randomUUID()}"
       println(s"Generating Local Catalog with URI: $uri")
-      val model = createCatalogModel(cfg, uri, isFdpMode)
-      saveLocalFile(cfg, "Catalog", model)
+      val model = createCatalogModel(meta, stats, uri, isFdpMode, fdpUrl, runMode)
+      saveLocalFile(outputDir, "Catalog", model)
       uri
     }
 
-    if (finalCatalogUri.isEmpty) {
-      throw new RuntimeException("CRITICAL ERROR: Could not determine a valid Catalog URI.")
-    }
-
-    // DATASET
+    // 2. Dataset
     println(s"Preparing Dataset (Linking to Parent Catalog: $finalCatalogUri)...")
-
-    // If local, we need a UUID. If FDP, we use empty string to let FDP mint the ID.
     val initialDatasetUri = if (isFdpMode) "" else s"urn:uuid:${UUID.randomUUID()}"
-    val datasetModel = createDatasetModel(cfg, stats, finalCatalogUri, initialDatasetUri)
-    saveLocalFile(cfg, "Dataset", datasetModel)
+    val datasetModel = createDatasetModel(meta, stats, finalCatalogUri, initialDatasetUri, runMode)
+    saveLocalFile(outputDir, "Dataset", datasetModel)
 
     val finalDatasetUri = if (isFdpMode) {
-      val loc = postToFdp(cfg, "dataset", datasetModel)
+      val loc = postToFdp(fdpUrl, fdpEmail, fdpPassword, "dataset", datasetModel)
       println(s"Dataset created at: $loc")
       loc
     } else {
       initialDatasetUri
     }
 
-    // DISTRIBUTION
+    // 3. Main Distribution
     println(s"Preparing Distribution (Linking to Parent Dataset: $finalDatasetUri)...")
-
     val initialDistUri = if (isFdpMode) "" else s"urn:uuid:${UUID.randomUUID()}"
-    val distModel = createDistributionModel(cfg, finalDatasetUri, initialDistUri)
-    saveLocalFile(cfg, "Distribution", distModel)
+    val distModel = createDistributionModel(meta.distribution, finalDatasetUri, initialDistUri)
+    saveLocalFile(outputDir, "Distribution", distModel)
 
     if (isFdpMode) {
-      val loc = postToFdp(cfg, "distribution", distModel)
+      val loc = postToFdp(fdpUrl, fdpEmail, fdpPassword, "distribution", distModel)
       println(s"Distribution created at: $loc")
     }
 
-    // LOCAL EXTRAS
-    val csvwModel = createCsvwModel(cfg, stats)
-    saveLocalFile(cfg, "CSVW", csvwModel)
-
+    // 4. Extras
+    saveLocalFile(outputDir, "CSVW", createCsvwModel(stats))
     if (stats.vocabularies.nonEmpty) {
-      val vocabModel = createSkosModel(stats)
-      saveLocalFile(cfg, "Vocabularies", vocabModel)
+      saveLocalFile(outputDir, "Vocabularies", createSkosModel(stats))
     }
 
     println("Metadata generation completed successfully.")
@@ -199,84 +201,156 @@ object MetadataWriter {
   /**
    * Posts an RDF Model to the configured FAIR Data Point.
    *
-   * @param cfg    Config containing FDP URL and credentials.
-   * @param prefix The resource prefix (e.g., "catalog", "dataset").
-   * @param model  The Jena Model to post.
+   * @param fdpUrl      FDP base URL.
+   * @param fdpEmail    FDP auth email.
+   * @param fdpPassword FDP auth password.
+   * @param prefix      The resource prefix (e.g., "catalog", "dataset").
+   * @param model       The Jena Model to post.
    * @return The Location URI returned by the FDP server.
    */
-  private def postToFdp(cfg: Config, prefix: String, model: Model): String = {
+  private def postToFdp(fdpUrl: String, fdpEmail: String, fdpPassword: String, prefix: String, model: Model): String = {
     println(s"Posting to $prefix...")
-    val result = FdpClient.postResource(cfg.fdpUrl, prefix, model, cfg.fdpEmail, cfg.fdpPassword)
+    val result = FdpClient.postResource(fdpUrl, prefix, model, fdpEmail, fdpPassword)
     result.location.getOrElse(throw new RuntimeException(s"FDP did not return location header for $prefix")).toString
   }
 
   /**
    * Writes the given Jena Model to a Turtle (.ttl) file in the output directory.
    *
-   * @param cfg   Configuration containing output directory path.
-   * @param name  Name of the file (e.g., "Dataset").
-   * @param model The Jena Model to write.
+   * @param outputDir The destination folder string.
+   * @param name      Name of the file (e.g., "Dataset").
+   * @param model     The Jena Model to write.
    */
-  private def saveLocalFile(cfg: Config, name: String, model: Model): Unit = {
-    val path = s"${cfg.outputDir}/$name.ttl"
+  private def saveLocalFile(outputDir: String, name: String, model: Model): Unit = {
+    val path = s"$outputDir/$name.ttl"
     println(s"Writing local file: $path")
     RdfUtils.writeTurtle(path, model)
   }
 
-  // MODEL FACTORIES
+  // --- MODEL FACTORIES ---
 
   /**
    * Creates the RDF Model for the Data Catalog.
    *
-   * @param config     Configuration object.
+   * @param meta       Configuration object.
+   * @param stats      Dynamic statistics (for temporal overrides).
    * @param subjectUri The subject URI for the Catalog (or empty string for relative).
    * @param isFdpMode  Boolean indicating if FDP mode is active to add isPartOf links.
+   * @param fdpUrl     The FDP server base URL.
+   * @param runMode    The current application run mode.
    * @return A populated Jena Model.
    */
-  private def createCatalogModel(config: Config, subjectUri: String, isFdpMode: Boolean): Model = {
+  private def createCatalogModel(meta: ConfigLoader, stats: DatasetStats, subjectUri: String, isFdpMode: Boolean, fdpUrl: String, runMode: String): Model = {
     val m = createModel()
-    val catalog = createSubject(m, subjectUri)
-      .addProperty(RDF.`type`, DCAT.Catalog)
-      .addProperty(DCTerms.title, config.catalogTitle)
-      .addProperty(DCTerms.description, config.catalogDescription)
+    val catalog = createSubject(m, subjectUri).addProperty(RDF.`type`, DCAT.Catalog)
 
-    // Optional fields
-    if(config.issuedDate.nonEmpty) catalog.addProperty(DCTerms.issued, m.createTypedLiteral(config.issuedDate, XSDDatatype.XSDdate))
-    if(config.modificationDate.nonEmpty) catalog.addProperty(DCTerms.modified, m.createTypedLiteral(config.modificationDate, XSDDatatype.XSDdate))
+    if (meta.catalog.existing.contains(true)) return m
 
-    val temporal = m.createResource()
-      .addProperty(RDF.`type`, DCTerms.PeriodOfTime)
+    val isExcel = runMode.toLowerCase == "excel"
 
-    if(config.catalogStartDate.nonEmpty) temporal.addProperty(DCAT.startDate, m.createTypedLiteral(config.catalogStartDate, XSDDatatype.XSDdate))
-    if(config.catalogEndDate.nonEmpty) temporal.addProperty(DCAT.endDate, m.createTypedLiteral(config.catalogEndDate, XSDDatatype.XSDdate))
+    meta.catalog.title.foreach(catalog.addProperty(DCTerms.title, _))
+    meta.catalog.description.foreach(catalog.addProperty(DCTerms.description, _))
+    meta.catalog.applicableLegislation.foreach(al => catalog.addProperty(m.createProperty(DCATAP_NS, "applicableLegislation"), safeRes(m, al).addProperty(RDF.`type`, m.createResource(LEGAL_RESOURCE))))
 
-    // Only add temporal if it has properties
-    if(config.catalogStartDate.nonEmpty || config.catalogEndDate.nonEmpty) catalog.addProperty(DCTerms.temporal, temporal)
+    val catStart = if (!isExcel && stats.startDate.isDefined) stats.startDate else meta.catalog.temporalCoverage.flatMap(_.start)
+    val catEnd = if (!isExcel && stats.endDate.isDefined) stats.endDate else meta.catalog.temporalCoverage.flatMap(_.end)
 
-    val legislation = m.createResource(config.catalogApplicableLegislation)
-    legislation.addProperty(RDF.`type`, m.createResource(LEGAL_RESOURCE))
-    catalog.addProperty(m.createProperty(DCATAP_NS, "applicableLegislation"), legislation)
-
-    val language = m.createResource("http://publications.europa.eu/resource/authority/language/ENG")
-    language.addProperty(RDF.`type`, DCTerms.LinguisticSystem)
-    catalog.addProperty(DCTerms.language, language)
-
-    if (config.catalogSpatial.nonEmpty) {
-      val spatial = m.createResource(config.catalogSpatial)
-      spatial.addProperty(RDF.`type`, DCTerms.Location)
-      catalog.addProperty(DCTerms.spatial, spatial)
+    if (catStart.isDefined || catEnd.isDefined) {
+      val temporal = m.createResource().addProperty(RDF.`type`, DCTerms.PeriodOfTime)
+      catStart.filter(_.matches("\\d{4}-\\d{2}-\\d{2}")).foreach(s => temporal.addProperty(DCAT.startDate, m.createTypedLiteral(s, XSDDatatype.XSDdate)))
+      catEnd.filter(_.matches("\\d{4}-\\d{2}-\\d{2}")).foreach(e => temporal.addProperty(DCAT.endDate, m.createTypedLiteral(e, XSDDatatype.XSDdate)))
+      catalog.addProperty(DCTerms.temporal, temporal)
     }
 
-    val publisher = m.createResource()
-      .addProperty(RDF.`type`, FOAF.Agent)
-      .addProperty(FOAF.name, config.publisherName)
-      .addLiteral(m.createProperty(HEALTH_DCAT_NS, "trustedDataHolder"), true)
-    catalog.addProperty(DCTerms.publisher, publisher)
+    meta.catalog.geographicalCoverage.foreach(_.foreach(sp => catalog.addProperty(DCTerms.spatial, safeRes(m, sp).addProperty(RDF.`type`, DCTerms.Location))))
+    meta.catalog.themes.foreach(t => catalog.addProperty(DCAT.theme, safeRes(m, t)))
 
-    // Only link to FDP if we are actually in FDP mode and have a valid URL
-    if (isFdpMode && config.fdpUrl.nonEmpty) {
-      catalog.addProperty(DCTerms.isPartOf, m.createResource(config.fdpUrl))
+    meta.catalog.releaseDate.filter(_.matches("\\d{4}-\\d{2}-\\d{2}")).foreach(d => catalog.addProperty(DCTerms.issued, m.createTypedLiteral(d, XSDDatatype.XSDdate)))
+    meta.catalog.modificationDate.filter(_.matches("\\d{4}-\\d{2}-\\d{2}")).foreach(d => catalog.addProperty(DCTerms.modified, m.createTypedLiteral(d, XSDDatatype.XSDdate)))
+    meta.catalog.licence.foreach(l => catalog.addProperty(DCTerms.license, safeRes(m, l).addProperty(RDF.`type`, DCTerms.LicenseDocument)))
+    meta.catalog.homepage.foreach(h => catalog.addProperty(FOAF.homepage, safeRes(m, h).addProperty(RDF.`type`, FOAF.Document)))
+    meta.catalog.rights.foreach(r => catalog.addProperty(DCTerms.rights, m.createResource().addProperty(RDF.`type`, DCTerms.RightsStatement).addProperty(DCTerms.description, r)))
+    meta.catalog.language.foreach(langs => langs.foreach(l => catalog.addProperty(DCTerms.language, safeRes(m, l).addProperty(RDF.`type`, DCTerms.LinguisticSystem))))
+
+    meta.catalog.creator.foreach { c =>
+      val creator = m.createResource().addProperty(RDF.`type`, FOAF.Agent)
+      creator.addProperty(FOAF.name, c.name)
+      c.`type`.foreach(t => creator.addProperty(DCTerms.`type`, safeRes(m, t)))
+      catalog.addProperty(DCTerms.creator, creator)
     }
+
+    meta.catalog.publisher.foreach { p =>
+      val publisher = m.createResource().addProperty(RDF.`type`, FOAF.Agent)
+      publisher.addProperty(FOAF.name, p.name)
+      p.trusted.foreach(t => publisher.addLiteral(m.createProperty(HEALTH_DCAT_NS, "trustedDataHolder"), t))
+      p.`type`.foreach(t => publisher.addProperty(DCTerms.`type`, safeRes(m, t)))
+
+      val contact = m.createResource().addProperty(RDF.`type`, VCARD4.Kind)
+      p.contactPoint.email.foreach(e => contact.addProperty(VCARD4.hasEmail, safeRes(m, s"mailto:$e")))
+      p.contactPoint.page.foreach(page => contact.addProperty(VCARD4.hasURL, safeRes(m, page)))
+      publisher.addProperty(DCAT.contactPoint, contact)
+
+      catalog.addProperty(DCTerms.publisher, publisher)
+    }
+
+    if (isFdpMode && fdpUrl.nonEmpty) catalog.addProperty(DCTerms.isPartOf, safeRes(m, fdpUrl))
+    m
+  }
+
+  /**
+   * Helper method to map Distribution metadata parameters to an existing RDF resource.
+   * Ensures SHACL compliance for formatting and node constraints.
+   *
+   * @param m        The Jena Model context.
+   * @param dist     The Target Resource (Main, Sample, or Analytics distribution).
+   * @param distMeta The extracted user input defining the distribution.
+   */
+  private def populateDistribution(m: Model, dist: Resource, distMeta: DistributionMetadataUserInput): Unit = {
+    distMeta.accessURL.foreach(url => dist.addProperty(DCAT.accessURL, safeRes(m, url)))
+    distMeta.applicableLegislation.foreach(al => dist.addProperty(m.createProperty(DCATAP_NS, "applicableLegislation"), safeRes(m, al).addProperty(RDF.`type`, m.createResource(LEGAL_RESOURCE))))
+    distMeta.format.foreach(fmt => dist.addProperty(DCTerms.format, safeRes(m, fmt).addProperty(RDF.`type`, m.createResource(MEDIA_TYPE_EXTENT))))
+
+    distMeta.title.foreach(dist.addProperty(DCTerms.title, _))
+    distMeta.description.foreach(dist.addProperty(DCTerms.description, _))
+    distMeta.license.foreach(lic => dist.addProperty(DCTerms.license, safeRes(m, lic).addProperty(RDF.`type`, DCTerms.LicenseDocument)))
+    distMeta.availability.foreach(av => dist.addProperty(m.createProperty(DCATAP_NS, "availability"), safeRes(m, av)))
+    distMeta.byteSize.foreach(bs => dist.addProperty(DCAT.byteSize, m.createTypedLiteral(bs.toLong, XSDDatatype.XSDnonNegativeInteger)))
+
+    distMeta.checksum.foreach { cs =>
+      val checksumRes = m.createResource().addProperty(RDF.`type`, m.createResource("http://spdx.org/rdf/terms#Checksum"))
+      checksumRes.addProperty(m.createProperty("http://spdx.org/rdf/terms#algorithm"), safeRes(m, cs.algorithm).addProperty(RDF.`type`, m.createResource("http://spdx.org/rdf/terms#ChecksumAlgorithm")))
+      val hex = cs.value.replaceAll("[^0-9a-fA-F]", "")
+      val validHex = if (hex.length % 2 != 0) hex.dropRight(1) else hex
+      if (validHex.nonEmpty) {
+        checksumRes.addProperty(m.createProperty("http://spdx.org/rdf/terms#checksumValue"), m.createTypedLiteral(validHex, XSDDatatype.XSDhexBinary))
+      }
+      dist.addProperty(m.createProperty("http://spdx.org/rdf/terms#checksum"), checksumRes)
+    }
+
+    distMeta.mediaType.foreach(mt => dist.addProperty(DCAT.mediaType, safeRes(m, mt).addProperty(RDF.`type`, m.createResource(MEDIA_TYPE))))
+    distMeta.packagingFormat.foreach(pf => dist.addProperty(DCAT.packageFormat, safeRes(m, pf).addProperty(RDF.`type`, m.createResource(MEDIA_TYPE))))
+    distMeta.releaseDate.filter(_.matches("\\d{4}-\\d{2}-\\d{2}")).foreach(rd => dist.addProperty(DCTerms.issued, m.createTypedLiteral(rd, XSDDatatype.XSDdate)))
+    distMeta.rights.foreach(r => dist.addProperty(DCTerms.rights, m.createResource().addProperty(RDF.`type`, DCTerms.RightsStatement).addProperty(DCTerms.description, r)))
+    distMeta.spatialResolution.foreach(sr => dist.addProperty(DCAT.spatialResolutionInMeters, m.createTypedLiteral(sr, XSDDatatype.XSDdecimal)))
+    distMeta.status.foreach(s => dist.addProperty(m.createProperty(ADMS_NS, "status"), safeRes(m, s)))
+
+    distMeta.temporalResolution.filter(_.matches("^P.*")).foreach(tr => dist.addProperty(DCAT.temporalResolution, m.createTypedLiteral(tr, XSDDatatype.XSDduration)))
+    distMeta.accessService.foreach(as => dist.addProperty(m.createProperty(DCAT.NS, "accessService"), safeRes(m, as)))
+  }
+
+  /**
+   * Creates the RDF Model for the Primary Distribution.
+   * This represents the actual downloadable file containing the cohort data.
+   *
+   * @param distMeta   Configuration input for the distribution.
+   * @param datasetUri The URI of the parent Dataset.
+   * @param subjectUri The subject URI for the Distribution.
+   * @return A populated Jena Model.
+   */
+  private def createDistributionModel(distMeta: DistributionMetadataUserInput, datasetUri: String, subjectUri: String): Model = {
+    val m = createModel()
+    val dist = createSubject(m, subjectUri).addProperty(RDF.`type`, DCAT.Distribution).addProperty(DCTerms.isPartOf, m.createResource(datasetUri))
+    populateDistribution(m, dist, distMeta)
     m
   }
 
@@ -286,152 +360,166 @@ object MetadataWriter {
    * This method incorporates both static configuration (Title, License) and dynamic
    * statistics (Record Count, Age Range) derived from the data.
    *
-   * @param config     Configuration object.
+   * @param meta       Configuration object.
    * @param stats      Dynamic statistics (counts, age min/max).
    * @param catalogUri The URI of the parent Catalog (required for dct:isPartOf).
    * @param subjectUri The subject URI for the Dataset.
+   * @param runMode    The active run mode defining dynamic fallback behavior.
    * @return A populated Jena Model.
    */
-  private def createDatasetModel(config: Config, stats: DatasetStats, catalogUri: String, subjectUri: String): Model = {
+  private def createDatasetModel(meta: ConfigLoader, stats: DatasetStats, catalogUri: String, subjectUri: String, runMode: String): Model = {
     val m = createModel()
     val dataset = createSubject(m, subjectUri)
       .addProperty(RDF.`type`, DCAT.Dataset)
       .addProperty(DCTerms.isPartOf, m.createResource(catalogUri))
-      .addProperty(DCTerms.title, config.datasetTitle)
-      .addProperty(DCTerms.description, config.datasetDescription)
-      .addProperty(DCTerms.identifier, m.createTypedLiteral(config.datasetIdentifier, XSDDatatype.XSDanyURI))
-      .addProperty(DCTerms.provenance, config.datasetProvenance)
-      .addProperty(DCTerms.`type`, m.createResource(DATASET_TYPE_STATISTICAL))
-      .addProperty(DCAT.theme, m.createResource(DATA_THEME_HEALTH))
 
-    if (config.datasetVersion.nonEmpty) dataset.addProperty(m.createProperty("http://www.w3.org/ns/dcat#version"), config.datasetVersion)
+    val isExcel = runMode.toLowerCase == "excel"
 
-    config.datasetKeywords.foreach { kw => dataset.addProperty(DCAT.keyword, kw) }
+    meta.dataset.datasetType.foreach(dt => dataset.addProperty(DCTerms.`type`, safeRes(m, dt)))
+    meta.dataset.theme.foreach(t => dataset.addProperty(DCAT.theme, safeRes(m, t)))
+    meta.dataset.title.foreach(dataset.addProperty(DCTerms.title, _))
+    meta.dataset.description.foreach(dataset.addProperty(DCTerms.description, _))
+    meta.dataset.provenance.foreach(dataset.addProperty(DCTerms.provenance, _))
+    meta.dataset.version.foreach(dataset.addProperty(m.createProperty("http://www.w3.org/ns/dcat#version"), _))
+    meta.dataset.applicableLegislation.foreach(al => dataset.addProperty(m.createProperty(DCATAP_NS, "applicableLegislation"), safeRes(m, al).addProperty(RDF.`type`, m.createResource(LEGAL_RESOURCE))))
+    meta.dataset.accessRights.foreach(ar => dataset.addProperty(DCTerms.accessRights, safeRes(m, ar).addProperty(RDF.`type`, DCTerms.RightsStatement)))
+    meta.dataset.frequency.foreach(f => dataset.addProperty(DCTerms.accrualPeriodicity, safeRes(m, f).addProperty(RDF.`type`, DCTerms.Frequency)))
 
-    dataset.addProperty(DCTerms.spatial, m.createResource(config.datasetSpatial).addProperty(RDF.`type`, DCTerms.Location))
-    dataset.addProperty(DCTerms.accessRights, m.createResource(config.datasetAccessRights).addProperty(RDF.`type`, DCTerms.RightsStatement))
-    dataset.addProperty(m.createProperty(DCATAP_NS, "applicableLegislation"), m.createResource(config.datasetLegislation).addProperty(RDF.`type`, m.createResource(LEGAL_RESOURCE)))
+    meta.dataset.identifier.foreach(id => dataset.addProperty(DCTerms.identifier, m.createTypedLiteral(id.replaceAll("\\s+", ""), XSDDatatype.XSDanyURI)))
 
-    if(config.datasetFrequency.nonEmpty) {
-      dataset.addProperty(DCTerms.accrualPeriodicity, m.createResource(config.datasetFrequency).addProperty(RDF.`type`, DCTerms.Frequency))
-    }
+    meta.dataset.keyword.foreach(_.foreach(kw => dataset.addProperty(DCAT.keyword, kw)))
+    meta.dataset.spatial.foreach(_.foreach(sp => dataset.addProperty(DCTerms.spatial, safeRes(m, sp).addProperty(RDF.`type`, DCTerms.Location))))
 
-    // Temporal Coverage
-    if (config.datasetTemporalStart.nonEmpty || config.datasetTemporalEnd.nonEmpty) {
+    val dsStart = if (!isExcel && stats.startDate.isDefined) stats.startDate else meta.dataset.temporalCoverage.flatMap(_.start)
+    val dsEnd = if (!isExcel && stats.endDate.isDefined) stats.endDate else meta.dataset.temporalCoverage.flatMap(_.end)
+
+    if (dsStart.isDefined || dsEnd.isDefined) {
       val temporal = m.createResource().addProperty(RDF.`type`, DCTerms.PeriodOfTime)
-      if (config.datasetTemporalStart.nonEmpty) temporal.addProperty(DCAT.startDate, m.createTypedLiteral(config.datasetTemporalStart, XSDDatatype.XSDdate))
-      if (config.datasetTemporalEnd.nonEmpty) temporal.addProperty(DCAT.endDate, m.createTypedLiteral(config.datasetTemporalEnd, XSDDatatype.XSDdate))
+      dsStart.filter(_.matches("\\d{4}-\\d{2}-\\d{2}")).foreach(s => temporal.addProperty(DCAT.startDate, m.createTypedLiteral(s, XSDDatatype.XSDdate)))
+      dsEnd.filter(_.matches("\\d{4}-\\d{2}-\\d{2}")).foreach(e => temporal.addProperty(DCAT.endDate, m.createTypedLiteral(e, XSDDatatype.XSDdate)))
       dataset.addProperty(DCTerms.temporal, temporal)
     }
 
-    // Contact Point
     val contact = m.createResource().addProperty(RDF.`type`, VCARD4.Kind)
-    if(config.contactEmail.nonEmpty) contact.addProperty(VCARD4.hasEmail, m.createResource(s"mailto:${config.contactEmail}"))
-    if (config.contactPage.nonEmpty) contact.addProperty(VCARD4.hasURL, m.createResource(config.contactPage))
+    meta.dataset.contactPoint.email.foreach(e => contact.addProperty(VCARD4.hasEmail, safeRes(m, s"mailto:$e")))
+    meta.dataset.contactPoint.page.foreach(p => contact.addProperty(VCARD4.hasURL, safeRes(m, p)))
     dataset.addProperty(DCAT.contactPoint, contact)
 
-    // Health Metadata
-    val hCat = m.createResource(config.healthCategory).addProperty(RDF.`type`, SKOS.Concept).addProperty(SKOS.prefLabel, m.createLiteral("Electronic Health Records", "en"))
-    val hTheme = m.createResource(config.healthTheme).addProperty(RDF.`type`, SKOS.Concept).addProperty(SKOS.prefLabel, m.createLiteral("Lifecourse Health", "en"))
-    dataset.addProperty(m.createProperty(HEALTH_DCAT_NS, "healthCategory"), hCat)
-    dataset.addProperty(m.createProperty(HEALTH_DCAT_NS, "healthTheme"), hTheme)
+    meta.dataset.healthCategory.foreach { hc =>
+      val hcConcept = safeRes(m, hc).addProperty(RDF.`type`, SKOS.Concept)
+      hcConcept.addProperty(SKOS.prefLabel, m.createLiteral(hc.split("/").last.replace("_", " "), "en"))
+      dataset.addProperty(m.createProperty(HEALTH_DCAT_NS, "healthCategory"), hcConcept)
+    }
 
-    dataset.addLiteral(m.createProperty(HEALTH_DCAT_NS, "numberOfRecords"), m.createTypedLiteral(stats.recordCount, XSDDatatype.XSDnonNegativeInteger))
-    dataset.addLiteral(m.createProperty(HEALTH_DCAT_NS, "numberOfUniqueIndividuals"), m.createTypedLiteral(stats.uniquePatients, XSDDatatype.XSDnonNegativeInteger))
-    dataset.addLiteral(m.createProperty(HEALTH_DCAT_NS, "minTypicalAge"), m.createTypedLiteral(stats.minAge, XSDDatatype.XSDnonNegativeInteger))
-    dataset.addLiteral(m.createProperty(HEALTH_DCAT_NS, "maxTypicalAge"), m.createTypedLiteral(stats.maxAge, XSDDatatype.XSDnonNegativeInteger))
-    if(config.datasetPopulationCoverage.nonEmpty) dataset.addLiteral(m.createProperty(HEALTH_DCAT_NS, "populationCoverage"), config.datasetPopulationCoverage)
+    meta.dataset.healthTheme.foreach { ht =>
+      val htConcept = safeRes(m, ht).addProperty(RDF.`type`, SKOS.Concept)
+      htConcept.addProperty(SKOS.prefLabel, m.createLiteral(ht.split("/").last.replace("_", " "), "en"))
+      dataset.addProperty(m.createProperty(HEALTH_DCAT_NS, "healthTheme"), htConcept)
+    }
 
-    // Publisher
-    val publisher = m.createResource()
-      .addProperty(RDF.`type`, FOAF.Agent)
-      .addProperty(FOAF.name, config.publisherName)
-      .addLiteral(m.createProperty(HEALTH_DCAT_NS, "trustedDataHolder"), config.publisherTrusted)
+    meta.dataset.populationCoverage.foreach(dataset.addLiteral(m.createProperty(HEALTH_DCAT_NS, "populationCoverage"), _))
 
-    val pubType = if (config.publisherType.startsWith("http")) config.publisherType else "http://publications.europa.eu/resource/authority/corporate-body-type/RES_BODY"
-    publisher.addProperty(DCTerms.`type`, m.createResource(pubType))
+    val numRec = if (!isExcel && stats.recordCount > 0) stats.recordCount else meta.dataset.numRecords.map(_.toLong).getOrElse(0L)
+    val numPat = if (!isExcel && stats.uniquePatients > 0) stats.uniquePatients else meta.dataset.numUniqueIndividual.map(_.toLong).getOrElse(0L)
+    val minA = if (!isExcel && stats.minAge > 0) stats.minAge else meta.dataset.minAge.getOrElse(0)
+    val maxA = if (!isExcel && stats.maxAge > 0) stats.maxAge else meta.dataset.maxAge.getOrElse(0)
 
-    val pubContact = m.createResource().addProperty(RDF.`type`, VCARD4.Kind)
-    if(config.publisherEmail.nonEmpty) pubContact.addProperty(VCARD4.hasEmail, m.createResource(s"mailto:${config.publisherEmail}"))
-    if (config.publisherPage.nonEmpty) pubContact.addProperty(VCARD4.hasURL, m.createResource(config.publisherPage))
-    publisher.addProperty(DCAT.contactPoint, pubContact)
+    dataset.addLiteral(m.createProperty(HEALTH_DCAT_NS, "numberOfRecords"), m.createTypedLiteral(numRec, XSDDatatype.XSDnonNegativeInteger))
+    dataset.addLiteral(m.createProperty(HEALTH_DCAT_NS, "numberOfUniqueIndividuals"), m.createTypedLiteral(numPat, XSDDatatype.XSDnonNegativeInteger))
+    dataset.addLiteral(m.createProperty(HEALTH_DCAT_NS, "minTypicalAge"), m.createTypedLiteral(minA, XSDDatatype.XSDnonNegativeInteger))
+    dataset.addLiteral(m.createProperty(HEALTH_DCAT_NS, "maxTypicalAge"), m.createTypedLiteral(maxA, XSDDatatype.XSDnonNegativeInteger))
 
-    dataset.addProperty(DCTerms.publisher, publisher)
+    meta.dataset.publisher.foreach { p =>
+      val pub = m.createResource().addProperty(RDF.`type`, FOAF.Agent).addProperty(FOAF.name, p.name)
+      p.trusted.foreach(t => pub.addLiteral(m.createProperty(HEALTH_DCAT_NS, "trustedDataHolder"), t))
+      p.`type`.foreach(t => pub.addProperty(DCTerms.`type`, safeRes(m, t)))
+      p.note.foreach(n => pub.addProperty(DCTerms.description, n))
+      val pubContact = m.createResource().addProperty(RDF.`type`, VCARD4.Kind)
+      p.contactPoint.email.foreach(e => pubContact.addProperty(VCARD4.hasEmail, safeRes(m, s"mailto:$e")))
+      p.contactPoint.page.foreach(p => pubContact.addProperty(VCARD4.hasURL, safeRes(m, p)))
+      pub.addProperty(DCAT.contactPoint, pubContact)
+      dataset.addProperty(DCTerms.publisher, pub)
+    }
 
-    // HDAB
-    val hdab = m.createResource()
-      .addProperty(RDF.`type`, FOAF.Agent)
-      .addProperty(FOAF.name, config.hdabName)
-      .addLiteral(m.createProperty(HEALTH_DCAT_NS, "trustedDataHolder"), config.hdabTrusted)
-
-    val hdabType = if (config.hdabType.startsWith("http")) config.hdabType else "http://publications.europa.eu/resource/authority/corporate-body-type/EUN_BOD"
-    hdab.addProperty(DCTerms.`type`, m.createResource(hdabType))
-
+    val hdab = m.createResource().addProperty(RDF.`type`, FOAF.Agent)
+    meta.dataset.hdab.name.foreach(hdab.addProperty(FOAF.name, _))
+    meta.dataset.hdab.trusted.foreach(t => hdab.addLiteral(m.createProperty(HEALTH_DCAT_NS, "trustedDataHolder"), t))
+    meta.dataset.hdab.`type`.foreach(t => hdab.addProperty(DCTerms.`type`, safeRes(m, t)))
     val hdabContact = m.createResource().addProperty(RDF.`type`, VCARD4.Kind)
-    if(config.hdabContactEmail.nonEmpty) hdabContact.addProperty(VCARD4.hasEmail, m.createResource(s"mailto:${config.hdabContactEmail}"))
-    if (config.hdabContactPage.nonEmpty) hdabContact.addProperty(VCARD4.hasURL, m.createResource(config.hdabContactPage))
+    meta.dataset.hdab.contactPoint.email.foreach(e => hdabContact.addProperty(VCARD4.hasEmail, safeRes(m, s"mailto:$e")))
+    meta.dataset.hdab.contactPoint.page.foreach(p => hdabContact.addProperty(VCARD4.hasURL, safeRes(m, p)))
     hdab.addProperty(DCAT.contactPoint, hdabContact)
-
     dataset.addProperty(m.createProperty(HEALTH_DCAT_NS, "hdab"), hdab)
 
-    if (config.datasetQualityAnnotation.nonEmpty) {
-      val qualityAnn = m.createResource()
-        .addProperty(RDF.`type`, m.createResource("http://www.w3.org/ns/dqv#QualityAnnotation"))
-        .addProperty(DCTerms.description, config.datasetQualityAnnotation)
-      dataset.addProperty(m.createProperty(DQV_NS, "hasQualityAnnotation"), qualityAnn)
+    // --- OPTIONALS ---
+    meta.dataset.conformsTo.foreach(c => dataset.addProperty(DCTerms.conformsTo, safeRes(m, c).addProperty(RDF.`type`, DCTerms.Standard)))
+    meta.dataset.documentation.foreach(d => dataset.addProperty(FOAF.page, safeRes(m, d).addProperty(RDF.`type`, FOAF.Document)))
+    meta.dataset.alternative.foreach(_.foreach(a => dataset.addProperty(DCTerms.alternative, a)))
+
+    val finalCodingSystems = if (!isExcel && stats.codingSystems.nonEmpty) stats.codingSystems else meta.dataset.codingSystems.getOrElse(Seq.empty)
+    finalCodingSystems.foreach(cs => dataset.addProperty(m.createProperty(HEALTH_DCAT_NS, "hasCodingSystem"), safeRes(m, cs)))
+
+    meta.dataset.codeValues.foreach { codes =>
+      codes.foreach { cv =>
+        val concept = m.createResource().addProperty(RDF.`type`, SKOS.Concept).addProperty(SKOS.notation, cv.notation).addProperty(SKOS.prefLabel, m.createLiteral(cv.label, "en"))
+        cv.scheme.foreach(s => concept.addProperty(SKOS.inScheme, safeRes(m, s)))
+        dataset.addProperty(m.createProperty(HEALTH_DCAT_NS, "hasCodeValues"), concept)
+      }
     }
 
-    // DPV Tags
-    dataset.addProperty(m.createProperty(DPV_NS, "hasPersonalData"), m.createResource("https://w3c.github.io/dpv/2.0/pd#Age"))
-    dataset.addProperty(m.createProperty(DPV_NS, "hasPersonalData"), m.createResource("https://w3c.github.io/dpv/2.0/pd#Gender"))
+    meta.dataset.retentionPeriod.foreach { period =>
+      val temp = m.createResource().addProperty(RDF.`type`, DCTerms.PeriodOfTime)
+      period.start.filter(_.matches("\\d{4}-\\d{2}-\\d{2}")).foreach(s => temp.addProperty(DCAT.startDate, m.createTypedLiteral(s, XSDDatatype.XSDdate)))
+      period.end.filter(_.matches("\\d{4}-\\d{2}-\\d{2}")).foreach(e => temp.addProperty(DCAT.endDate, m.createTypedLiteral(e, XSDDatatype.XSDdate)))
+      dataset.addProperty(m.createProperty(HEALTH_DCAT_NS, "retentionPeriod"), temp)
+    }
 
-    // Sample Distribution
-    if (config.sampleAccessUrl.nonEmpty) {
-      val sample = m.createResource()
-        .addProperty(RDF.`type`, DCAT.Distribution)
-        .addProperty(DCTerms.title, config.sampleTitle)
-        .addProperty(DCAT.accessURL, m.createResource(config.sampleAccessUrl))
-        .addProperty(m.createProperty(DCATAP_NS, "applicableLegislation"), m.createResource(config.datasetLegislation)) // Fallback to dataset legislation if specific sample legislation missing
+    meta.dataset.personalData.foreach(_.foreach(pd => dataset.addProperty(m.createProperty(DPV_NS, "hasPersonalData"), safeRes(m, pd))))
+    meta.dataset.landingPage.foreach(lp => dataset.addProperty(DCAT.landingPage, safeRes(m, lp).addProperty(RDF.`type`, FOAF.Document)))
+    meta.dataset.language.foreach(l => dataset.addProperty(DCTerms.language, safeRes(m, l).addProperty(RDF.`type`, DCTerms.LinguisticSystem)))
+    meta.dataset.modificationDate.filter(_.matches("\\d{4}-\\d{2}-\\d{2}")).foreach(md => dataset.addProperty(DCTerms.modified, m.createTypedLiteral(md, XSDDatatype.XSDdate)))
+    meta.dataset.releaseDate.filter(_.matches("\\d{4}-\\d{2}-\\d{2}")).foreach(rd => dataset.addProperty(DCTerms.issued, m.createTypedLiteral(rd, XSDDatatype.XSDdate)))
 
-      if (config.sampleFormat.nonEmpty) {
-        val fmt = m.createResource(config.sampleFormat)
-        fmt.addProperty(RDF.`type`, m.createResource(MEDIA_TYPE_EXTENT))
-        sample.addProperty(DCTerms.format, fmt)
-      }
+    meta.dataset.otherIdentifier.foreach(_.foreach { oi =>
+      val idNode = m.createResource()
+        .addProperty(RDF.`type`, m.createResource(ADMS_NS + "Identifier"))
+        .addProperty(SKOS.notation, m.createTypedLiteral(oi, XSDDatatype.XSDstring))
+      dataset.addProperty(m.createProperty(ADMS_NS, "identifier"), idNode)
+    })
+
+    meta.dataset.qualifiedAttribution.foreach(_.foreach { qa =>
+      val attr = m.createResource().addProperty(RDF.`type`, m.createResource(PROV_NS + "Attribution"))
+      val agent = m.createResource().addProperty(RDF.`type`, FOAF.Agent).addProperty(FOAF.name, qa.name)
+      attr.addProperty(m.createProperty(PROV_NS, "agent"), agent)
+      qa.role.foreach(r => attr.addProperty(DCAT.hadRole, safeRes(m, r)))
+      dataset.addProperty(m.createProperty(PROV_NS, "qualifiedAttribution"), attr)
+    })
+
+    meta.dataset.spatialResolution.foreach(sr => dataset.addProperty(DCAT.spatialResolutionInMeters, m.createTypedLiteral(sr, XSDDatatype.XSDdecimal)))
+    meta.dataset.temporalResolution.filter(_.matches("^P.*")).foreach(tr => dataset.addProperty(DCAT.temporalResolution, m.createTypedLiteral(tr, XSDDatatype.XSDduration)))
+    meta.dataset.versionNotes.foreach(vn => dataset.addProperty(m.createProperty(ADMS_NS, "versionNotes"), vn))
+    meta.dataset.wasGeneratedBy.foreach(_.foreach(wg => dataset.addProperty(m.createProperty(PROV_NS, "wasGeneratedBy"), safeRes(m, wg).addProperty(RDF.`type`, m.createResource(PROV_NS + "Activity")))))
+    meta.dataset.purpose.foreach(p => dataset.addProperty(m.createProperty(DPV_NS, "hasPurpose"), p))
+
+    meta.dataset.creator.foreach { c =>
+      val creator = m.createResource().addProperty(RDF.`type`, FOAF.Agent).addProperty(FOAF.name, c.name)
+      c.`type`.foreach(t => creator.addProperty(DCTerms.`type`, safeRes(m, t)))
+      c.email.foreach(e => creator.addProperty(VCARD4.hasEmail, safeRes(m, s"mailto:$e")))
+      dataset.addProperty(DCTerms.creator, creator)
+    }
+
+    meta.dataset.sample.foreach { s =>
+      val sample = m.createResource().addProperty(RDF.`type`, DCAT.Distribution)
+      populateDistribution(m, sample, s)
       dataset.addProperty(m.createProperty(ADMS_NS, "sample"), sample)
     }
-    m
-  }
 
-  /**
-   * Creates the RDF Model for the Primary Distribution.
-   * This represents the actual downloadable CSV file containing the cohort data.
-   *
-   * @param config     Configuration object.
-   * @param datasetUri The URI of the parent Dataset.
-   * @param subjectUri The subject URI for the Distribution.
-   * @return A populated Jena Model.
-   */
-  private def createDistributionModel(config: Config, datasetUri: String, subjectUri: String): Model = {
-    val m = createModel()
-    val dist = createSubject(m, subjectUri)
-      .addProperty(RDF.`type`, DCAT.Distribution)
-      .addProperty(DCTerms.isPartOf, m.createResource(datasetUri))
-      .addProperty(DCTerms.title, "Distribution")
-      .addProperty(DCAT.accessURL, m.createResource(config.distributionAccessUrl))
-
-    val fmt = m.createResource(config.distributionFormat)
-    fmt.addProperty(RDF.`type`, m.createResource(MEDIA_TYPE_EXTENT))
-    dist.addProperty(DCTerms.format, fmt)
-
-    if (config.distributionLicense.nonEmpty) {
-      val lic = m.createResource(config.distributionLicense)
-      lic.addProperty(RDF.`type`, DCTerms.LicenseDocument)
-      dist.addProperty(DCTerms.license, lic)
+    meta.dataset.analytics.foreach { a =>
+      val analyticsDist = m.createResource().addProperty(RDF.`type`, DCAT.Distribution)
+      populateDistribution(m, analyticsDist, a)
+      dataset.addProperty(DCTerms.relation, analyticsDist)
     }
 
-    dist.addProperty(m.createProperty(DCATAP_NS, "applicableLegislation"), m.createResource(config.distributionLegislation).addProperty(RDF.`type`, m.createResource(LEGAL_RESOURCE)))
-    if (config.distributionDescription.nonEmpty) dist.addProperty(DCTerms.description, config.distributionDescription)
     m
   }
 
@@ -439,18 +527,15 @@ object MetadataWriter {
    * Generates a CSV on the Web (CSVW) schema model.
    * This describes the structure of the CSV file, including column names and data types.
    *
-   * @param config Configuration object.
-   * @param stats  DatasetStats containing the column definitions extracted from the dataframe.
+   * @param stats DatasetStats containing the column definitions extracted from the dataframe.
    * @return A populated Jena Model representing the CSVW schema.
    */
-  private def createCsvwModel(config: Config, stats: DatasetStats): Model = {
+  private def createCsvwModel(stats: DatasetStats): Model = {
     val m = createModel()
-    val tableGroup = m.createResource("urn:uuid:" + UUID.randomUUID())
-      .addProperty(RDF.`type`, m.createResource(CSVW_NS + "TableGroup"))
-    val table = m.createResource("urn:uuid:" + UUID.randomUUID())
-      .addProperty(RDF.`type`, m.createResource(CSVW_NS + "Table"))
-      .addProperty(DCTerms.title, "Tabular data schema")
+    val tableGroup = m.createResource("urn:uuid:" + UUID.randomUUID()).addProperty(RDF.`type`, m.createResource(CSVW_NS + "TableGroup"))
+    val table = m.createResource("urn:uuid:" + UUID.randomUUID()).addProperty(RDF.`type`, m.createResource(CSVW_NS + "Table")).addProperty(DCTerms.title, "Tabular data schema")
     tableGroup.addProperty(m.createProperty(CSVW_NS, "table"), table)
+
     stats.columns.foreach { case (colName, colType) =>
       val col = m.createResource("urn:uuid:" + UUID.randomUUID())
         .addProperty(RDF.`type`, m.createResource(CSVW_NS + "Column"))
@@ -479,9 +564,7 @@ object MetadataWriter {
     val m = createModel()
     stats.vocabularies.foreach { case (colName, options) =>
       val schemeUri = s"$VOCAB_BASE/$colName"
-      val scheme = m.createResource(schemeUri)
-        .addProperty(RDF.`type`, SKOS.ConceptScheme)
-        .addProperty(DCTerms.title, s"Vocabulary for $colName")
+      val scheme = m.createResource(schemeUri).addProperty(RDF.`type`, SKOS.ConceptScheme).addProperty(DCTerms.title, s"Vocabulary for $colName")
       options.foreach { case (code, display) =>
         val concept = m.createResource(s"$schemeUri/$code")
           .addProperty(RDF.`type`, SKOS.Concept)
