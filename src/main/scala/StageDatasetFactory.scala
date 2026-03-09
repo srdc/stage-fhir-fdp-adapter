@@ -19,8 +19,11 @@ object StageDatasetFactory {
    * @param args Command line arguments passed to the application.
    */
   def main(args: Array[String]): Unit = {
-    // Initialize the command-line argument parser builder
-    val builder = OParser.builder[Config]
+    // Load baseline defaults from application.conf
+    val baseConfig = AppConfig.load()
+
+    // Initialize the command-line argument parser builder for AppConfig
+    val builder = OParser.builder[AppConfig]
 
     // Define the CLI parser structure and available flags
     val parser1 = {
@@ -49,7 +52,7 @@ object StageDatasetFactory {
 
         // Configuration Loading Strategy
         opt[String]("excelPath")
-          .action((x, c) => c.copy(excelPath = Some(x)))
+          .action((x, c) => c.copy(excelPath = x))
           .text("Path to an optional Excel configuration file"),
 
         opt[String]('m', "runMode")
@@ -58,21 +61,21 @@ object StageDatasetFactory {
 
         // FAIR Data Point (FDP) Automation Settings
         opt[String]("fdpUrl")
-          .action((x, c) => c.copy(fdpUrl = x))
+          .action((x, c) => c.copy(fdpUrl = Some(x)))
           .text("Target FAIR Data Point URL (e.g. http://localhost:8081)"),
 
         opt[String]("fdpEmail")
-          .action((x, c) => c.copy(fdpEmail = x))
+          .action((x, c) => c.copy(fdpEmail = Some(x)))
           .text("Email address for FDP authentication"),
 
         opt[String]("fdpPassword")
-          .action((x, c) => c.copy(fdpPassword = x))
+          .action((x, c) => c.copy(fdpPassword = Some(x)))
           .text("Password for FDP authentication")
       )
     }
 
-    // execute the parsing; if successful run the job, otherwise exit with error code
-    OParser.parse(parser1, args, Config()) match {
+    // execute the parsing using baseConfig; if successful run the job, otherwise exit with error code
+    OParser.parse(parser1, args, baseConfig) match {
       case Some(config) => runJob(config)
       case _ => System.exit(1)
     }
@@ -81,10 +84,13 @@ object StageDatasetFactory {
   /**
    * Sets up the Spark environment and executes the requested ETL job.
    *
-   * @param config The fully populated configuration object.
+   * @param config The fully populated application configuration object.
    */
-  private def runJob(config: Config): Unit = {
+  private def runJob(config: AppConfig): Unit = {
     println(s"--- Starting Job: ${config.jobType.toUpperCase} ---")
+
+    // Load static metadata
+    val staticMetadata = ConfigLoader.load(config)
 
     // Initialize the Spark Session (using local[*] for standalone execution)
     implicit val spark: SparkSession = SparkSession.builder()
@@ -96,9 +102,9 @@ object StageDatasetFactory {
     implicit val sparkOnFhir: SparkOnFhir =
       SparkOnFhir("R4").fromFhirServer(config.fhirServer)
 
-    // Route execution to the specific extraction pipeline
+    // Route execution to the specific extraction pipeline, passing both configs
     config.jobType match {
-      case "survey" => SurveyExtraction.run(config)
+      case "survey" => SurveyExtraction.run(config, staticMetadata)
       case _ => println(s"Error: Unknown job type '${config.jobType}'")
     }
 
