@@ -13,7 +13,9 @@ JVM_OPTS="--add-exports=java.base/sun.nio.ch=ALL-UNNAMED \
           --add-opens=java.base/java.util=ALL-UNNAMED \
           --add-opens=java.base/sun.util.calendar=ALL-UNNAMED \
           -Dhadoop.home.dir=${HADOOP_DIR} \
-          -Djava.library.path=${HADOOP_DIR}/bin"
+          -Djava.library.path=${HADOOP_DIR}/bin \
+          -Dconfig.file=src/main/resources/application.conf \
+          -Dlog4j2.disable.jmx=true"
 
 # 3. Run the Application
 echo "Launching Healthy Aging CLI..."

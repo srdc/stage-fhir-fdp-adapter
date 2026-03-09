@@ -2,12 +2,119 @@ import com.sun.net.httpserver.{HttpExchange, HttpHandler, HttpServer}
 import java.net.InetSocketAddress
 import java.awt.Desktop
 import java.net.URI
-import java.io.{ByteArrayOutputStream, File}
+import java.io.File
 import java.nio.charset.StandardCharsets
 import java.net.URLDecoder
 import scala.io.Source
-import org.json4s._
-import org.json4s.jackson.JsonMethods._
+import org.apache.poi.ss.usermodel.{Cell, DataFormatter, Workbook, WorkbookFactory}
+import org.apache.poi.ss.usermodel.Row.MissingCellPolicy
+import io.onfhir.feast.parsers.JsonFormatter
+import scala.util.Try
+
+case class Agent(name: String, email: Option[String] = None, `type`: Option[String] = None)
+case class Period(start: Option[String], end: Option[String])
+case class CodeValue(scheme: Option[String], notation: String, label: String)
+case class ContactPointMetadataUserInput(name: Option[String] = None, page: Option[String] = None, email: Option[String] = None)
+case class HDABMetadataUserInput(name: Option[String] = None, `type`: Option[String] = None, contactPoint: ContactPointMetadataUserInput, note: Option[String] = None, trusted: Option[Boolean] = None)
+case class Publisher(name: String, `type`: Option[String] = None, contactPoint: ContactPointMetadataUserInput, note: Option[String] = None, trusted: Option[Boolean] = None, url: Option[String] = None)
+case class QualifiedAttribution(name: String, role: Option[String])
+case class Checksum(algorithm: String, value: String)
+
+case class CatalogMetadataUserInput(
+                                     existing: Option[Boolean] = None,
+                                     uri: Option[String] = None,
+                                     title: Option[String] = None,
+                                     description: Option[String] = None,
+                                     applicableLegislation: Option[String] = None,
+                                     creator: Option[Agent] = None,
+                                     geographicalCoverage: Option[Seq[String]] = None,
+                                     temporalCoverage: Option[Period] = None,
+                                     licence: Option[String] = None,
+                                     themes: Option[String] = None,
+                                     homepage: Option[String] = None,
+                                     language: Option[Seq[String]] = None,
+                                     modificationDate: Option[String] = None,
+                                     publisher: Option[Publisher] = None,
+                                     releaseDate: Option[String] = None,
+                                     rights: Option[String] = None
+                                   )
+
+case class DistributionMetadataUserInput(
+                                          title: Option[String] = None,
+                                          applicableLegislation: Option[String] = None,
+                                          accessURL: Option[String] = None,
+                                          description: Option[String] = None,
+                                          format: Option[String] = None,
+                                          license: Option[String] = None,
+                                          availability: Option[String] = None,
+                                          byteSize: Option[Int] = None,
+                                          checksum: Option[Checksum] = None,
+                                          mediaType: Option[String] = None,
+                                          packagingFormat: Option[String] = None,
+                                          releaseDate: Option[String] = None,
+                                          rights: Option[String] = None,
+                                          spatialResolution: Option[Double] = None,
+                                          status: Option[String] = None,
+                                          temporalResolution: Option[String] = None,
+                                          accessService: Option[String] = None
+                                        )
+
+case class DatasetMetadataUserInput(
+                                     title: Option[String] = None,
+                                     description: Option[String] = None,
+                                     identifier: Option[String] = None,
+                                     version: Option[String] = None,
+                                     populationCoverage: Option[String] = None,
+                                     theme: Option[String] = None,
+                                     provenance: Option[String] = None,
+                                     contactPoint: ContactPointMetadataUserInput,
+                                     hdab: HDABMetadataUserInput,
+                                     publisher: Option[Publisher] = None,
+                                     keyword: Option[Seq[String]] = None,
+                                     spatial: Option[Seq[String]] = None,
+                                     healthCategory: Option[String] = None,
+                                     datasetType: Option[String] = None,
+                                     applicableLegislation: Option[String] = None,
+                                     accessRights: Option[String] = None,
+                                     healthTheme: Option[String] = None,
+                                     conformsTo: Option[String] = None,
+                                     creator: Option[Agent] = None,
+                                     documentation: Option[String] = None,
+                                     frequency: Option[String] = None,
+                                     sample: Option[DistributionMetadataUserInput] = None,
+                                     analytics: Option[DistributionMetadataUserInput] = None,
+                                     alternative: Option[Seq[String]] = None,
+                                     codeValues: Option[Seq[CodeValue]] = None,
+                                     codingSystems: Option[Seq[String]] = None,
+                                     numRecords: Option[Int] = None,
+                                     retentionPeriod: Option[Period] = None,
+                                     maxAge: Option[Int] = None,
+                                     minAge: Option[Int] = None,
+                                     numUniqueIndividual: Option[Int] = None,
+                                     personalData: Option[Seq[String]] = None,
+                                     landingPage: Option[String] = None,
+                                     language: Option[String] = None,
+                                     modificationDate: Option[String] = None,
+                                     releaseDate: Option[String] = None,
+                                     otherIdentifier: Option[Seq[String]] = None,
+                                     qualifiedAttribution: Option[Seq[QualifiedAttribution]] = None,
+                                     spatialResolution: Option[Double] = None,
+                                     temporalCoverage: Option[Period] = None,
+                                     temporalResolution: Option[String] = None,
+                                     versionNotes: Option[String] = None,
+                                     wasGeneratedBy: Option[Seq[String]] = None,
+                                     purpose: Option[String] = None,
+                                     qualityAnnotation: String = ""
+                                   )
+
+case class CsvwField(name: String, title: String, datatype: String, description: Option[String] = None, propertyUrl: Option[String] = None, unit: Option[String] = None)
+
+case class ConfigLoader(
+                         catalog: CatalogMetadataUserInput,
+                         dataset: DatasetMetadataUserInput,
+                         distribution: DistributionMetadataUserInput,
+                         dataDictionary: Option[List[CsvwField]] = None
+                       )
 
 /**
  * Utility object for loading the application configuration.
@@ -15,322 +122,530 @@ import org.json4s.jackson.JsonMethods._
  */
 object ConfigLoader {
 
-  val SUCCESS_HTML = """<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Success</title></head><body><h1>Configuration Received!</h1><p>You can close this tab and return to the terminal.</p><script>setTimeout(() => window.close(), 2000)</script></body></html>"""
+  val SUCCESS_HTML = """<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Success</title></head><body style="font-family: sans-serif; text-align: center; margin-top: 50px;"><h1>Configuration Received!</h1><p>You can close this tab and return to your terminal.</p><script>setTimeout(() => window.close(), 2000)</script></body></html>"""
 
   /**
    * Main entry point for loading configuration.
    * Dispatches to the specific loading strategy based on the 'runMode' parameter.
    *
-   * @param baseConfig The initial configuration (usually from CLI args).
-   * @return A fully populated Config object.
+   * @param appConfig The initial application configuration (usually from CLI args).
+   * @return A fully populated ConfigLoader object.
    */
-  def load(baseConfig: Config): Config = {
-    baseConfig.runMode match {
-      case "json" => loadFromJson(baseConfig)
-      case "excel" => loadFromExcel(baseConfig)
-      case _      => loadFromBrowser(baseConfig)
+  def load(appConfig: AppConfig): ConfigLoader = {
+    appConfig.runMode.toLowerCase match {
+      case "json" => loadFromJson(appConfig)
+      case "excel" => loadFromExcel(appConfig)
+      case "browser" => loadFromBrowser(appConfig)
+      case _      => throw new IllegalArgumentException(s"Unknown runMode: ${appConfig.runMode}")
     }
   }
 
   /**
    * Loads configuration directly from a JSON file.
    *
-   * @param config Configuration containing the JSON path.
-   * @return Config object parsed from JSON.
+   * @param appConfig Configuration containing the JSON path.
+   * @return ConfigLoader object parsed from JSON.
    */
-  private def loadFromJson(config: Config): Config = {
-    implicit val formats: Formats = DefaultFormats
-    val path = config.jsonPath.getOrElse(throw new IllegalArgumentException("JSON mode selected but no jsonPath provided."))
-    println(s"Loading configuration from JSON: $path")
-    val jsonContent = Source.fromFile(path).mkString
-    parse(jsonContent).extract[Config]
+  private def loadFromJson(appConfig: AppConfig): ConfigLoader = {
+    println(s"Loading static metadata from JSON: ${appConfig.jsonPath}")
+    val jsonContent = Source.fromFile(appConfig.jsonPath).mkString
+    Try(JsonFormatter.fromJson[ConfigLoader](jsonContent))
+      .getOrElse(throw new IllegalArgumentException("Invalid JSON metadata file!"))
   }
 
   /**
-   * Loads configuration from an Excel file using the ExcelConfigParser.
+   * Loads configuration from an Excel file using Apache POI.
    *
-   * @param config Configuration containing the Excel path.
-   * @return Config object parsed from Excel.
+   * @param appConfig Configuration containing the Excel path.
+   * @return ConfigLoader object parsed from Excel.
    */
-  private def loadFromExcel(config: Config): Config = {
-    val path = config.excelPath.getOrElse(
-      throw new IllegalArgumentException("Excel mode selected but no excelPath provided (--excelPath)")
-    )
-    ExcelConfigParser.parse(path, config)
+  private def loadFromExcel(appConfig: AppConfig): ConfigLoader = {
+    println(s"Loading static metadata from Excel: ${appConfig.excelPath}")
+    val file = new File(appConfig.excelPath)
+    val wb = WorkbookFactory.create(file)
+    val metadata = fromExcel(wb)
+    wb.close()
+    metadata
   }
 
   /**
    * Launches a local HTTP server to serve an HTML form.
    * Allows the user to interactively edit the configuration in their browser.
    *
-   * @param defaultConfig Default configuration values to pre-fill the form.
-   * @return The updated Config object submitted by the user.
+   * @param appConfig Default application configuration values to pre-fill the form (e.g., FDP URL, Output Dir).
+   * @return The updated ConfigLoader object submitted by the user.
    */
-  private def loadFromBrowser(defaultConfig: Config): Config = {
-    val templateFile = new File(defaultConfig.htmlTemplatePath)
-    if (!templateFile.exists()) {
-      throw new java.io.FileNotFoundException(s"Could not find HTML template at: ${templateFile.getAbsolutePath}")
+  private def loadFromBrowser(appConfig: AppConfig): ConfigLoader = {
+    println("Fetching EU Vocabularies. This might take a few seconds...")
+
+    val healthCategories = Map(
+      "http://13.81.34.152:1101/resource/authority/healthcategories/NRPE" -> "Aggregated data on healthcare needs, resources allocated to healthcare, the provision of and access to healthcare, healthcare expenditure and financing",
+      "http://13.81.34.152:1101/resource/authority/healthcategories/EHCT" -> "Data from clinical trials, clinical studies, clinical investigations and performance studies subject to Regulation (EU) No 536/2014, Regulation (EU) 2024/1938 of the European Parliament and of the Council34, Regulation (EU) 2017/745 and Regulation (EU) 2017/746",
+      "http://13.81.34.152:1101/resource/authority/healthcategories/MRMR" -> "Data from medical registries and mortality registries",
+      "http://13.81.34.152:1101/resource/authority/healthcategories/PHDR" -> "Data from population-based health data registries such as public health registries",
+      "http://13.81.34.152:1101/resource/authority/healthcategories/RMMD" -> "Data from registries for medicinal products and medical devices",
+      "http://13.81.34.152:1101/resource/authority/healthcategories/RQSH" -> "Data from research cohorts, questionnaires and surveys related to health, after the first publication of the related results",
+      "http://13.81.34.152:1101/resource/authority/healthcategories/WELA" -> "Data from wellness applications",
+      "http://13.81.34.152:1101/resource/authority/healthcategories/DIOH" -> "Data on factors impacting on health, including socio-economic, environmental and behavioural determinants of health",
+      "http://13.81.34.152:1101/resource/authority/healthcategories/RPDG" -> "Data on pathogens that impact human health",
+      "http://13.81.34.152:1101/resource/authority/healthcategories/IDHP" -> "Data on professional status, and on the specialisation and institution of health professionals involved in the treatment of a natural person",
+      "http://13.81.34.152:1101/resource/authority/healthcategories/EHRS" -> "Electronic Health Data from EHRs",
+      "http://13.81.34.152:1101/resource/authority/healthcategories/EINS" -> "Health data from biobanks and associated databases",
+      "http://13.81.34.152:1101/resource/authority/healthcategories/HRAD" -> "Healthcare-related administrative data, including on dispensations, reimbursement claims and reimbursements",
+      "http://13.81.34.152:1101/resource/authority/healthcategories/HGPD" -> "Human genetic, epigenomic and genomic data",
+      "http://13.81.34.152:1101/resource/authority/healthcategories/EMRD" -> "Other health data from medical devices",
+      "http://13.81.34.152:1101/resource/authority/healthcategories/HPML" -> "Other human molecular data such as proteomic, transcriptomic, metabolomic, lipidomic and other omic data",
+      "http://13.81.34.152:1101/resource/authority/healthcategories/PGEH" -> "Personal electronic health data automatically generated through medical devices"
+    )
+
+    val healthThemes = Map(
+      "http://13.81.34.152:1101/resource/authority/health-theme/ANTIMICROBIAL_CONTROL" -> "Antimicrobial resistance infection control",
+      "http://13.81.34.152:1101/resource/authority/health-theme/BLOOD_INFECTIONS" -> "Blood-borne sexually transmitted infections",
+      "http://13.81.34.152:1101/resource/authority/health-theme/CANCER_DISEASE" -> "Cancer",
+      "http://13.81.34.152:1101/resource/authority/health-theme/CLIMATE_HEALTH" -> "Climate planetary health",
+      "http://13.81.34.152:1101/resource/authority/health-theme/EMERGENCY_SETTINGS" -> "Emergencies, disasters, travel humanitarian settings",
+      "http://13.81.34.152:1101/resource/authority/health-theme/ENTERIC_INFECTIONS" -> "Enteric, water- food-borne infections",
+      "http://13.81.34.152:1101/resource/authority/health-theme/ENVIRONMENTAL_HEALTH" -> "Environmental, occupational radiation health (incl. WASH urban)",
+      "http://13.81.34.152:1101/resource/authority/health-theme/HEALTH_PRODUCTS" -> "Health products, technologies, data research",
+      "http://13.81.34.152:1101/resource/authority/health-theme/HEALTH_SYSTEMS" -> "Health systems, quality, care models determinants",
+      "http://13.81.34.152:1101/resource/authority/health-theme/IMMUNIZATION_DISEASES" -> "Immunization vaccine-preventable diseases",
+      "http://13.81.34.152:1101/resource/authority/health-theme/INJURY_PREVENTION" -> "Injuries, envenoming drowning",
+      "http://13.81.34.152:1101/resource/authority/health-theme/LIFECOURSE_HEALTH" -> "Life-course health: maternal, newborn, child, adolescent ageing",
+      "http://13.81.34.152:1101/resource/authority/health-theme/MENTAL_HEALTH" -> "Mental, neurological substance use",
+      "http://13.81.34.152:1101/resource/authority/health-theme/TROPICAL_DISEASES" -> "Neglected tropical, parasitic fungal skin diseases",
+      "http://13.81.34.152:1101/resource/authority/health-theme/NONCOMMUNICABLE_DISEASES" -> "Noncommunicable diseases – metabolic cardiopulmonary",
+      "http://13.81.34.152:1101/resource/authority/health-theme/NUTRITION_SECURITY" -> "Nutrition food security",
+      "http://13.81.34.152:1101/resource/authority/health-theme/SENSORY_HEALTH" -> "Oral, eye sensory health",
+      "http://13.81.34.152:1101/resource/authority/health-theme/RESPIRATORY_DISEASES" -> "Respiratory infectious diseases",
+      "http://13.81.34.152:1101/resource/authority/health-theme/REPRODUCTIVE_HEALTH" -> "Sexual reproductive health and rights",
+      "http://13.81.34.152:1101/resource/authority/health-theme/VECTOR_DISEASES" -> "Vector-borne zoonotic viral diseases"
+    )
+
+    def toHtmlOption(pair: (String, String)) = s"""<option value="${pair._1}">${pair._2}</option>"""
+
+    val stream = getClass.getClassLoader.getResourceAsStream("form.html")
+    if (stream == null) {
+      throw new IllegalStateException("form.html not found in resources folder! Make sure it is placed in src/main/resources/form.html")
     }
-    val htmlTemplate = Source.fromFile(templateFile, "UTF-8").mkString
+    val htmlTemplate = Source.fromInputStream(stream)(StandardCharsets.UTF_8).mkString
 
-    // Setup local server on port 9999
-    val port = 9999
-    val server = HttpServer.create(new InetSocketAddress(port), 0)
-    var capturedConfig: Option[Config] = None
-    val lock = new Object()
+    var htmlContent = htmlTemplate
+      .replace("{{countryOptions}}", PubEU.queryCountryNames.map(toHtmlOption).mkString(""))
+      .replace("{{themeOptions}}", PubEU.queryDataThemes.map(toHtmlOption).mkString(""))
+      .replace("{{hdabTypeOptions}}", PubEU.queryCorporateBodyTypes.map(toHtmlOption).mkString(""))
+      .replace("{{typeOptions}}", PubEU.queryDatasetTypes.map(toHtmlOption).mkString(""))
+      .replace("{{fileTypeOptions}}", PubEU.queryFileTypes.map(toHtmlOption).mkString(""))
+      .replace("{{accessRightsOptions}}", PubEU.queryAccessRights.map(toHtmlOption).mkString(""))
+      .replace("{{frequencyOptions}}", PubEU.queryFrequencies.map(toHtmlOption).mkString(""))
+      .replace("{{healthCategoryOptions}}", healthCategories.map(toHtmlOption).mkString(""))
+      .replace("{{healthThemeOptions}}", healthThemes.map(toHtmlOption).mkString(""))
+      .replace("{{catalog-uri}}", appConfig.fdpUrl.map(_ + "/catalog/").getOrElse(""))
+      .replace("{{catalog-title}}", "STAGE Data Catalog")
+      .replace("{{catalog-description}}", "FAIRful metadata catalog for the datasets collected in the scope of STAGE project")
+      .replace("{{catalog-applicable-legislation}}", "https://eur-lex.europa.eu/eli/reg/2025/327/oj")
+      .replace("{{title}}", "Core")
+      .replace("{{dataset-version}}", "1.0.0")
+      .replace("{{description}}", "NFBC1986 is a longitudinal one-year birth cohort study from an unselected population.")
+      .replace("{{dataset-quality-annotation}}", "Data validated against STAGE quality assurance protocols.")
+      .replace("{{provenance}}", "The original data have been supplemented by data collected with postal questionnaires at the ages of 7, 8 and 16 years.")
+      .replace("{{keyword}}", "finland, lapland, birth cohort")
+      .replace("{{identifier}}", "http://oulu.fi/NFBC1986/core")
+      .replace("{{population-coverage}}", "Prenatal, Infant (0-23 months), Child (2-12 years), Adolescent (13-17 years), Young adult (18-24 years), Adult (25-44 years)")
+      .replace("{{contact-page}}", "https://example.com")
+      .replace("{{contact-email}}", "john.doe@oulu.fi")
+      .replace("{{publisher-name}}", "OULU")
+      .replace("{{publisher-page}}", "https://oulu.fi")
+      .replace("{{publisher-email}}", "info@oulu.edu.fi")
+      .replace("{{hdab-name}}", "OULU")
+      .replace("{{hdab-contact-page}}", "https://oulu.fi")
+      .replace("{{hdab-contact-email}}", "info@oulu.edu.fi")
+      .replace("{{hdab-note}}", "The publisher provides this dataset metadata without warranties of any kind.")
+      .replace("{{applicable-legislation}}", "https://eur-lex.europa.eu/eli/reg/2025/327/oj")
+      .replace("{{distribution-access-url}}", "https://www.oulu.fi/nfbc")
+      .replace("{{distribution-license}}", "http://creativecommons.org/licenses/by/4.0/")
+      .replace("{{distribution-applicable-legislation}}", "https://eur-lex.europa.eu/eli/reg/2025/327/oj")
+      .replace("{{distribution-description}}", "The primary dataset distribution.")
+      .replace("{{sample-title}}", "NFBC1986 Samples")
+      .replace("{{sample-access-url}}", "https://oulu.fi/nfbc1986/sample.csv")
+      .replace("{{sample-legislation}}", "http://eur-lex.europa.eu/eli/reg/2025/327/oj")
 
-    println(s"Starting configuration server at http://localhost:$port")
+    // Scrub all unused placeholders
+    htmlContent = htmlContent.replaceAll("\\{\\{[^}]+\\}\\}", "")
 
-    // Handler for serving the HTML form (GET request)
+    var resultConfig: Option[ConfigLoader] = None
+    val server = HttpServer.create(new InetSocketAddress(0), 0)
+
     server.createContext("/", new HttpHandler {
       override def handle(exchange: HttpExchange): Unit = {
         if (exchange.getRequestMethod == "GET") {
-          val response = populateForm(htmlTemplate, defaultConfig)
-          val responseBytes = response.getBytes(StandardCharsets.UTF_8)
-          exchange.getResponseHeaders.set("Content-Type", "text/html; charset=UTF-8")
-          exchange.sendResponseHeaders(200, responseBytes.length)
-          val os = exchange.getResponseBody
-          os.write(responseBytes)
-          os.close()
-        }
-      }
-    })
-
-    // Handler for processing the form submission (POST request)
-    server.createContext("/form", new HttpHandler {
-      override def handle(exchange: HttpExchange): Unit = {
-        if (exchange.getRequestMethod == "POST") {
-          // Read the request body
+          val bytes = htmlContent.getBytes(StandardCharsets.UTF_8)
+          exchange.sendResponseHeaders(200, bytes.length)
+          exchange.getResponseBody.write(bytes)
+          exchange.getResponseBody.close()
+        } else if (exchange.getRequestMethod == "POST" && exchange.getRequestURI.getPath == "/form") {
           val is = exchange.getRequestBody
-          val os = new ByteArrayOutputStream()
-          val buffer = new Array[Byte](1024)
-          var len = is.read(buffer)
-          while (len != -1) { os.write(buffer, 0, len); len = is.read(buffer) }
-          val body = new String(os.toByteArray, StandardCharsets.UTF_8)
+          val body = new String(is.readAllBytes(), StandardCharsets.UTF_8)
 
-          // Parse form data and update config
-          val formData = parseFormData(body)
-          capturedConfig = Some(mapFormToConfig(formData, defaultConfig))
+          val formData = body.split("&").map { kv =>
+            val split = kv.split("=")
+            val key = URLDecoder.decode(split(0), "UTF-8")
+            val value = if (split.length > 1) URLDecoder.decode(split(1), "UTF-8") else ""
+            key -> value
+          }.toMap
 
-          // Send success response
-          exchange.sendResponseHeaders(200, SUCCESS_HTML.length)
-          val out = exchange.getResponseBody
-          out.write(SUCCESS_HTML.getBytes)
-          out.close()
+          resultConfig = Some(fromFormData(formData))
 
-          // Notify the main thread that config is captured
-          lock.synchronized { lock.notify() }
+          val resp = SUCCESS_HTML.getBytes(StandardCharsets.UTF_8)
+          exchange.sendResponseHeaders(200, resp.length)
+          exchange.getResponseBody.write(resp)
+          exchange.getResponseBody.close()
         }
       }
     })
 
     server.setExecutor(null)
     server.start()
+    val url = s"http://localhost:${server.getAddress.getPort}"
+    println(s"Waiting for browser input. Form launched at: $url")
 
-    // Open browser automatically if supported
     if (Desktop.isDesktopSupported) {
-      Desktop.getDesktop.browse(new URI(s"http://localhost:$port"))
-    } else {
-      println(s"Please open http://localhost:$port in your browser.")
+      Desktop.getDesktop.browse(new URI(url))
     }
 
-    // Wait until configuration is captured
-    lock.synchronized {
-      while (capturedConfig.isEmpty) { lock.wait() }
+    while(resultConfig.isEmpty) {
+      Thread.sleep(500)
     }
 
     server.stop(0)
-    println("Configuration received. Server stopped.")
-    capturedConfig.get
+    println("Browser form successfully mapped!")
+    resultConfig.get
   }
 
   /**
-   * Injects default configuration values into the HTML template placeholders.
-   *
-   * @param html The raw HTML template string.
-   * @param c    The current configuration object.
-   * @return The HTML string with all placeholders replaced by values.
-   */
-  private def populateForm(html: String, c: Config): String = {
-    // Helper to generate HTML select options
-    def opt(value: String, label: String) = s"""<option value="$value">$label</option>"""
-
-    // Define Option Lists
-    val themes = opt("http://publications.europa.eu/resource/authority/data-theme/HEAL", "Health") + opt("http://publications.europa.eu/resource/authority/data-theme/SOCI", "Social")
-    val countries = opt("http://publications.europa.eu/resource/authority/country/FIN", "Finland") + opt("http://publications.europa.eu/resource/authority/country/USA", "USA")
-    val corpTypes = opt("http://publications.europa.eu/resource/authority/corporate-body-type/EUN_BOD", "EU Body") + opt("http://publications.europa.eu/resource/authority/corporate-body-type/RES_INST", "Research Institute")
-    val rights = opt("http://publications.europa.eu/resource/authority/access-right/PUBLIC", "Public") + opt("http://publications.europa.eu/resource/authority/access-right/RESTRICTED", "Restricted")
-    val types = opt("http://publications.europa.eu/resource/authority/dataset-type/RELEASE", "Release")
-    val fileTypes = opt("http://publications.europa.eu/resource/authority/file-type/CSV", "CSV") + opt("http://publications.europa.eu/resource/authority/file-type/PDF", "PDF")
-    val healthCats = opt("http://13.81.34.152:1101/resource/authority/healthcategories/EHRS", "EHRs")
-    val healthThemes = opt("http://13.81.34.152:1101/resource/authority/health-theme/LIFECOURSE_HEALTH", "Lifecourse Health")
-    val frequencies = opt("http://publications.europa.eu/resource/authority/frequency/BIMONTHLY", "Bimonthly") + opt("http://publications.europa.eu/resource/authority/frequency/ANNUAL", "Annual")
-
-    html
-      // Technical & FDP
-      .replace("{{fdp-url}}", c.fdpUrl)
-      .replace("{{fdp-email}}", c.fdpEmail)
-      .replace("{{fdp-password}}", c.fdpPassword)
-      .replace("{{output-dir}}", c.outputDir)
-
-      // Catalog metadata
-      .replace("{{catalog-uri}}", c.catalogUri)
-      .replace("{{catalog-title}}", c.catalogTitle)
-      .replace("{{catalog-description}}", c.catalogDescription)
-      .replace("{{catalog-applicable-legislation}}", c.catalogApplicableLegislation)
-      .replace("{{catalog-start-date}}", c.catalogStartDate)
-      .replace("{{catalog-end-date}}", c.catalogEndDate)
-
-      // Dataset metadata
-      .replace("{{title}}", c.datasetTitle)
-      .replace("{{dataset-version}}", c.datasetVersion)
-      .replace("{{identifier}}", c.datasetIdentifier)
-      .replace("{{description}}", c.datasetDescription)
-      .replace("{{dataset-quality-annotation}}", c.datasetQualityAnnotation)
-      .replace("{{provenance}}", c.datasetProvenance)
-      .replace("{{keyword}}", c.datasetKeywords.mkString(","))
-      .replace("{{dataset-temporal-start}}", c.datasetTemporalStart)
-      .replace("{{dataset-temporal-end}}", c.datasetTemporalEnd)
-      .replace("{{population-coverage}}", c.datasetPopulationCoverage)
-      .replace("{{contact-page}}", c.contactPage)
-      .replace("{{contact-email}}", c.contactEmail)
-      .replace("{{applicable-legislation}}", c.datasetLegislation)
-
-      // Publisher (Data Holder)
-      .replace("{{publisher-name}}", c.publisherName)
-      .replace("{{publisher-page}}", c.publisherPage)
-      .replace("{{publisher-email}}", c.publisherEmail)
-      .replace("{{publisherTrustedChecked}}", if(c.publisherTrusted) "checked" else "")
-
-      // Health Data Access Body (HDAB)
-      .replace("{{hdab-name}}", c.hdabName)
-      .replace("{{hdab-contact-page}}", c.hdabContactPage)
-      .replace("{{hdab-contact-email}}", c.hdabContactEmail)
-      .replace("{{hdab-note}}", c.hdabNote)
-      .replace("{{hdabTrustedChecked}}", if(c.hdabTrusted) "checked" else "")
-
-      // Distribution metadata
-      .replace("{{distribution-access-url}}", c.distributionAccessUrl)
-      .replace("{{distribution-applicable-legislation}}", c.distributionLegislation)
-      .replace("{{distribution-license}}", c.distributionLicense)
-      .replace("{{distribution-description}}", c.distributionDescription)
-
-      // Sample Distribution metadata
-      .replace("{{sample-access-url}}", c.sampleAccessUrl)
-      .replace("{{sample-title}}", c.sampleTitle)
-      .replace("{{sample-legislation}}", c.sampleLegislation)
-
-      // Dropdown Options
-      .replace("{{themeOptions}}", themes)
-      .replace("{{countryOptions}}", countries)
-      .replace("{{hdabTypeOptions}}", corpTypes) // Reused for Publisher Type
-      .replace("{{accessRightsOptions}}", rights)
-      .replace("{{typeOptions}}", types)
-      .replace("{{healthCategoryOptions}}", healthCats)
-      .replace("{{healthThemeOptions}}", healthThemes)
-      .replace("{{fileTypeOptions}}", fileTypes)
-      .replace("{{frequencyOptions}}", frequencies)
-
-      // Cleanup remaining placeholders
-      .replaceAll("\\{\\{.*?\\}\\}", "")
-  }
-
-  /**
-   * Parses the raw x-www-form-urlencoded body string into a Map.
-   *
-   * @param body Raw body string from the POST request.
-   * @return A map of field names to decoded values.
-   */
-  private def parseFormData(body: String): Map[String, String] = {
-    body.split("&").map { pair =>
-      val parts = pair.split("=")
-      if (parts.length == 2) {
-        val key = URLDecoder.decode(parts(0), StandardCharsets.UTF_8.name())
-        val value = URLDecoder.decode(parts(1), StandardCharsets.UTF_8.name())
-        (key, value)
-      } else { (parts(0), "") }
-    }.toMap
-  }
-
-  /**
-   * Maps the raw form data Map to a new Config object.
+   * Maps the raw form data Map to a new ConfigLoader object.
    * Overrides default values with user-provided inputs where available.
    *
-   * @param data     Map containing form field names and values.
-   * @param defaults The default configuration to fallback on.
-   * @return A new Config instance reflecting the form data.
+   * @param formData Map containing form field names and values.
+   * @return A new ConfigLoader instance reflecting the form data.
    */
-  private def mapFormToConfig(data: Map[String, String], defaults: Config): Config = {
-    defaults.copy(
-      // Technical / FDP
-      fdpUrl = data.getOrElse("fdpUrl", defaults.fdpUrl),
-      fdpEmail = data.getOrElse("fdpEmail", defaults.fdpEmail),
-      fdpPassword = data.getOrElse("fdpPassword", defaults.fdpPassword),
-      outputDir = data.getOrElse("outputDir", defaults.outputDir),
+  def fromFormData(formData: Map[String, String]): ConfigLoader = {
+    def getOpt(key: String): Option[String] = formData.get(key).filter(_.trim.nonEmpty)
+    def getBool(key: String): Option[Boolean] = formData.get(key).map(_ == "on")
+    def reqStr(key: String, name: String): String = getOpt(key).getOrElse(throw new IllegalArgumentException(s"$name is required"))
 
-      // Catalog metadata
-      catalogIsExisting = data.contains("existingCatalog"),
-      catalogUri = data.getOrElse("catalogUri", defaults.catalogUri),
-      catalogTitle = data.getOrElse("catalogTitle", defaults.catalogTitle),
-      catalogDescription = data.getOrElse("catalogDescription", defaults.catalogDescription),
-      catalogApplicableLegislation = data.getOrElse("catalogApplicableLegislation", defaults.catalogApplicableLegislation),
-      catalogSpatial = data.getOrElse("catalogSpatial", defaults.catalogSpatial),
-      catalogStartDate = data.getOrElse("catalogStartDate", defaults.catalogStartDate),
-      catalogEndDate = data.getOrElse("catalogEndDate", defaults.catalogEndDate),
+    val publisher = getOpt("publisherName").map { name =>
+      Publisher(
+        name = name,
+        `type` = getOpt("publisherType"),
+        contactPoint = ContactPointMetadataUserInput(page = getOpt("publisherPage"), email = getOpt("publisherEmail")),
+        trusted = getBool("publisherTrusted")
+      )
+    }
 
-      // Dataset metadata
-      datasetTitle = data.getOrElse("title", defaults.datasetTitle),
-      datasetDescription = data.getOrElse("description", defaults.datasetDescription),
-      datasetVersion = data.getOrElse("datasetVersion", defaults.datasetVersion),
-      datasetIdentifier = data.getOrElse("identifier", defaults.datasetIdentifier),
-      datasetQualityAnnotation = data.getOrElse("datasetQualityAnnotation", defaults.datasetQualityAnnotation),
-      datasetTheme = data.getOrElse("theme", defaults.datasetTheme),
-      datasetProvenance = data.getOrElse("provenance", defaults.datasetProvenance),
-      datasetKeywords = data.get("keyword").map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq).getOrElse(defaults.datasetKeywords),
-      datasetSpatial = data.getOrElse("datasetSpatial", defaults.datasetSpatial),
-      datasetFrequency = data.getOrElse("datasetFrequency", defaults.datasetFrequency),
-      datasetTemporalStart = data.getOrElse("datasetTemporalStart", defaults.datasetTemporalStart),
-      datasetTemporalEnd = data.getOrElse("datasetTemporalEnd", defaults.datasetTemporalEnd),
-      datasetPopulationCoverage = data.getOrElse("populationCoverage", defaults.datasetPopulationCoverage),
-      datasetLegislation = data.getOrElse("applicableLegislation", defaults.datasetLegislation),
-      datasetAccessRights = data.getOrElse("accessRights", defaults.datasetAccessRights),
-      datasetType = data.getOrElse("type", defaults.datasetType),
+    val hdab = HDABMetadataUserInput(
+      name = getOpt("hdabName"),
+      `type` = getOpt("hdabType"),
+      contactPoint = ContactPointMetadataUserInput(page = getOpt("hdabContactPage"), email = getOpt("hdabContactEmail")),
+      note = getOpt("hdabNote"),
+      trusted = getBool("hdabTrusted")
+    )
 
-      // Health Specifics
-      healthCategory = data.getOrElse("healthCategory", defaults.healthCategory),
-      healthTheme = data.getOrElse("healthTheme", defaults.healthTheme),
+    ConfigLoader(
+      catalog = CatalogMetadataUserInput(
+        existing = getBool("existingCatalog"),
+        uri = getOpt("catalogUri"),
+        title = getOpt("catalogTitle"),
+        description = getOpt("catalogDescription"),
+        applicableLegislation = getOpt("catalogApplicableLegislation"),
+        geographicalCoverage = getOpt("catalogSpatial").map(Seq(_)),
+        temporalCoverage = None // Handled dynamically via FHIR stats
+      ),
+      dataset = DatasetMetadataUserInput(
+        title = getOpt("title"),
+        description = getOpt("description"),
+        identifier = getOpt("identifier"),
+        version = getOpt("datasetVersion"),
+        populationCoverage = getOpt("populationCoverage"),
+        theme = getOpt("theme"),
+        provenance = getOpt("provenance"),
+        contactPoint = ContactPointMetadataUserInput(page = getOpt("contactPage"), email = getOpt("contactEmail")),
+        hdab = hdab,
+        publisher = publisher,
+        keyword = getOpt("keyword").map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq),
+        spatial = getOpt("datasetSpatial").map(Seq(_)),
+        healthCategory = getOpt("healthCategory"),
+        datasetType = getOpt("type"),
+        applicableLegislation = getOpt("applicableLegislation"),
+        accessRights = getOpt("accessRights"),
+        healthTheme = getOpt("healthTheme"),
+        qualityAnnotation = reqStr("datasetQualityAnnotation", "Quality Annotation"),
+        frequency = getOpt("datasetFrequency"),
+        temporalCoverage = None, // Handled dynamically via FHIR stats
+        sample = getOpt("sampleAccessUrl").map { url =>
+          DistributionMetadataUserInput(
+            title = getOpt("sampleTitle"),
+            accessURL = Some(url),
+            format = getOpt("sampleFormat"),
+            applicableLegislation = getOpt("sampleLegislation")
+          )
+        }
+      ),
+      distribution = DistributionMetadataUserInput(
+        accessURL = getOpt("distributionAccessUrl"),
+        applicableLegislation = getOpt("distributionApplicableLegislation"),
+        format = getOpt("distributionFormat"),
+        license = getOpt("distributionLicense"),
+        description = getOpt("distributionDescription")
+      ),
+      dataDictionary = None
+    )
+  }
 
-      // Contact Points
-      contactPage = data.getOrElse("contactPage", defaults.contactPage),
-      contactEmail = data.getOrElse("contactEmail", defaults.contactEmail),
+  // --- EXCEL LOGIC ---
+  /**
+   * Parses the loaded Excel Workbook into a ConfigLoader object.
+   * Extracts data from Catalog, Dataset, Distribution, and Data Dictionary sheets.
+   *
+   * @param wb The active Excel Workbook instance.
+   * @return A fully populated ConfigLoader instance based on Excel inputs.
+   */
+  def fromExcel(wb: Workbook): ConfigLoader = {
+    def toStringOption(str: String) = str.trim match {
+      case s if s.isEmpty => None
+      case s => Some(s)
+    }
+    def toBooleanOption(str: String, path: String = "") = str.trim match {
+      case "true" => Some(true)
+      case "false" => Some(false)
+      case s if s.trim.isEmpty => None
+      case _ => throw new IllegalArgumentException(s"Incorrect value for boolean: $str ($path)")
+    }
+    def ensureNotEmpty(str: String, field: String) = {
+      if (str.trim.isEmpty) {
+        throw new IllegalArgumentException(s"The '$field' field cannot be empty.")
+      }
+      str.trim
+    }
 
-      // Publisher (Data Holder)
-      publisherName = data.getOrElse("publisherName", defaults.publisherName),
-      publisherType = data.getOrElse("publisherType", defaults.publisherType),
-      publisherPage = data.getOrElse("publisherPage", defaults.publisherPage),
-      publisherEmail = data.getOrElse("publisherEmail", defaults.publisherEmail),
-      publisherTrusted = data.contains("publisherTrusted"),
+    wb.setMissingCellPolicy(MissingCellPolicy.CREATE_NULL_AS_BLANK)
+    val catalogSheet = wb.getSheet("Catalog")
+    val datasetSheet = wb.getSheet("Dataset")
+    val distSheet = wb.getSheet("Distribution")
+    val dataDictionarySheet = wb.getSheet("Data Dictionary")
 
-      // Health Data Access Body (HDAB)
-      hdabName = data.getOrElse("hdabName", defaults.hdabName),
-      hdabType = data.getOrElse("hdabType", defaults.hdabType),
-      hdabContactPage = data.getOrElse("hdabContactPage", defaults.hdabContactPage),
-      hdabContactEmail = data.getOrElse("hdabContactEmail", defaults.hdabContactEmail),
-      hdabNote = data.getOrElse("hdabNote", defaults.hdabNote),
-      hdabTrusted = data.contains("hdabTrusted"),
+    val formatter = new DataFormatter()
+    val evaluator = wb.getCreationHelper.createFormulaEvaluator()
 
-      // Distribution metadata
-      distributionAccessUrl = data.getOrElse("distributionAccessUrl", defaults.distributionAccessUrl),
-      distributionLegislation = data.getOrElse("distributionApplicableLegislation", defaults.distributionLegislation),
-      distributionLicense = data.getOrElse("distributionLicense", defaults.distributionLicense),
-      distributionFormat = data.getOrElse("distributionFormat", defaults.distributionFormat),
-      distributionDescription = data.getOrElse("distributionDescription", defaults.distributionDescription),
+    def getCellStr(sheet: org.apache.poi.ss.usermodel.Sheet, rowIdx: Int, colIdx: Int = 6): String = {
+      Option(sheet.getRow(rowIdx)).flatMap(r => Option(r.getCell(colIdx))).map { c =>
+        evaluator.evaluate(c)
+        formatter.formatCellValue(c, evaluator).trim
+      }.getOrElse("")
+    }
 
-      // Sample Distribution metadata
-      sampleAccessUrl = data.getOrElse("sampleAccessUrl", defaults.sampleAccessUrl),
-      sampleTitle = data.getOrElse("sampleTitle", defaults.sampleTitle),
-      sampleFormat = data.getOrElse("sampleFormat", defaults.sampleFormat),
-      sampleLegislation = data.getOrElse("sampleLegislation", defaults.sampleLegislation)
+    def getFormattedOption(sheet: org.apache.poi.ss.usermodel.Sheet, rowIdx: Int) = toStringOption(getCellStr(sheet, rowIdx))
+
+    // Validations
+    val existingVal = toBooleanOption(getCellStr(catalogSheet, 1), "Catalog.existing")
+    val uriVal = getFormattedOption(catalogSheet, 2)
+    if (existingVal.contains(true) && uriVal.isEmpty) throw new IllegalArgumentException("Catalog.uri is REQUIRED when existing is true.")
+
+    val dsPage = getFormattedOption(datasetSheet, 8)
+    val dsEmail = getFormattedOption(datasetSheet, 9)
+    if (dsPage.isEmpty && dsEmail.isEmpty) throw new IllegalArgumentException("Dataset Contact Point requires at least one of page or email.")
+
+    val hdabPage = getFormattedOption(datasetSheet, 12)
+    val hdabEmail = getFormattedOption(datasetSheet, 13)
+    if (hdabPage.isEmpty && hdabEmail.isEmpty) throw new IllegalArgumentException("Dataset HDAB requires at least one of contact point page or email.")
+
+    val pubPage = getFormattedOption(datasetSheet, 15)
+    val pubEmail = getFormattedOption(datasetSheet, 16)
+    if (pubPage.isEmpty && pubEmail.isEmpty) throw new IllegalArgumentException("Dataset Publisher requires at least one of contact page or email.")
+
+    ConfigLoader(
+      catalog = CatalogMetadataUserInput(
+        existing = existingVal,
+        uri = uriVal,
+        title = getFormattedOption(catalogSheet, 3),
+        description = getFormattedOption(catalogSheet, 4),
+        applicableLegislation = getFormattedOption(catalogSheet, 5),
+        creator = getFormattedOption(catalogSheet, 6).map(name => Agent(
+          name,
+          email = None,
+          `type` = getFormattedOption(catalogSheet, 7)
+        )),
+        geographicalCoverage = getFormattedOption(catalogSheet, 8).map(_.split(",").toSeq),
+        temporalCoverage = (
+          getFormattedOption(catalogSheet, 9),
+          getFormattedOption(catalogSheet, 10)
+        ) match {
+          case (None, None) => None
+          case (start, end) => Some(Period(start, end))
+        },
+        licence = getFormattedOption(catalogSheet, 11),
+        themes = getFormattedOption(catalogSheet, 12),
+        homepage = getFormattedOption(catalogSheet, 13),
+        language = getFormattedOption(catalogSheet, 14).map(_.split(",").toSeq),
+        modificationDate = getFormattedOption(catalogSheet, 15),
+        publisher = (
+          getFormattedOption(catalogSheet, 16),
+          getFormattedOption(catalogSheet, 17),
+          getFormattedOption(catalogSheet, 18)
+        ) match {
+          case (None, None, None) => None
+          case (Some(_), None, None) =>
+            throw new IllegalArgumentException("At least one of the Publisher.email or Publisher.page fields are required!")
+          case (name, _, _) if !name.exists(_.trim.nonEmpty) =>
+            throw new IllegalArgumentException("Publisher.name should be provided if any other publisher fields are given! If you don't want to provide a publisher, leave all related fields empty.")
+          case (name, page, email) =>
+            Some(Publisher(
+              name = name.get,
+              contactPoint = ContactPointMetadataUserInput(page = page, email = email),
+              `type` = getFormattedOption(catalogSheet, 19),
+              note = getFormattedOption(catalogSheet, 20),
+              trusted = toBooleanOption(getCellStr(catalogSheet, 21), "Catalog.publisher.trusted")
+            ))
+        },
+        releaseDate = getFormattedOption(catalogSheet, 22),
+        rights = getFormattedOption(catalogSheet, 23)
+      ),
+      dataset = DatasetMetadataUserInput(
+        title = getFormattedOption(datasetSheet, 1),
+        description = getFormattedOption(datasetSheet, 2),
+        identifier = getFormattedOption(datasetSheet, 3),
+        version = getFormattedOption(datasetSheet, 4),
+        populationCoverage = getFormattedOption(datasetSheet, 5),
+        theme = getFormattedOption(datasetSheet, 6),
+        provenance = getFormattedOption(datasetSheet, 7),
+        contactPoint = ContactPointMetadataUserInput(
+          page = getFormattedOption(datasetSheet, 8),
+          email = getFormattedOption(datasetSheet, 9)
+        ),
+        hdab = HDABMetadataUserInput(
+          name = getFormattedOption(datasetSheet, 10),
+          `type` = getFormattedOption(datasetSheet, 11),
+          contactPoint = ContactPointMetadataUserInput(
+            page = getFormattedOption(datasetSheet, 12),
+            email = getFormattedOption(datasetSheet, 13)
+          )
+        ),
+        publisher = (
+          getFormattedOption(datasetSheet, 14),
+          getFormattedOption(datasetSheet, 15),
+          getFormattedOption(datasetSheet, 16)
+        ) match {
+          case (None, None, None) => None
+          case (Some(_), None, None) =>
+            throw new IllegalArgumentException("At least one of the (Dataset) Publisher.email or Publisher.page fields are required!")
+          case (name, _, _) if !name.exists(_.trim.nonEmpty) =>
+            throw new IllegalArgumentException("(Dataset) Publisher.name should be provided if any other publisher fields are given! If you don't want to provide a publisher, leave all related fields empty.")
+          case (name, page, email) =>
+            Some(Publisher(
+              name = name.get,
+              contactPoint = ContactPointMetadataUserInput(page = page, email = email),
+              `type` = getFormattedOption(datasetSheet, 17),
+              note = getFormattedOption(datasetSheet, 18),
+              trusted = toBooleanOption(getCellStr(datasetSheet, 19), "Dataset.Publisher.trusted")
+            ))
+        },
+        keyword = getFormattedOption(datasetSheet, 20).map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq),
+        spatial = getFormattedOption(datasetSheet, 21).map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq),
+        healthCategory = getFormattedOption(datasetSheet, 22),
+        datasetType = getFormattedOption(datasetSheet, 23),
+        applicableLegislation = getFormattedOption(datasetSheet, 24),
+        accessRights = getFormattedOption(datasetSheet, 25),
+        healthTheme = getFormattedOption(datasetSheet, 26),
+        conformsTo = getFormattedOption(datasetSheet, 27),
+        creator = getFormattedOption(datasetSheet, 28).map(name => Agent(
+          name,
+          email = None,
+          `type` = getFormattedOption(datasetSheet, 29)
+        )),
+        documentation = getFormattedOption(datasetSheet, 30),
+        frequency = getFormattedOption(datasetSheet, 31),
+        sample = None,
+        analytics = None,
+        alternative = getFormattedOption(datasetSheet, 40).map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq),
+        codeValues = Try(Seq(
+          getCellStr(datasetSheet, 41).split(",", -1),
+          getCellStr(datasetSheet, 42).split(",", -1),
+          getCellStr(datasetSheet, 43).split(",", -1)
+        ).transpose.filter(value => value.size >= 3 && value(1).nonEmpty && value(2).nonEmpty).map {
+          case Seq(scheme, notation, label) => CodeValue(toStringOption(scheme), notation, label)
+        }).toOption,
+        codingSystems = getFormattedOption(datasetSheet, 44).map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq),
+        numRecords = Try(getCellStr(datasetSheet, 45).toDouble.toInt).toOption,
+        retentionPeriod = (
+          getFormattedOption(datasetSheet, 46),
+          getFormattedOption(datasetSheet, 47)
+        ) match {
+          case (None, None) => None
+          case (start, end) => Some(Period(start, end))
+        },
+        maxAge = Try(getCellStr(datasetSheet, 48).toDouble.toInt).toOption,
+        minAge = Try(getCellStr(datasetSheet, 49).toDouble.toInt).toOption,
+        numUniqueIndividual = Try(getCellStr(datasetSheet, 50).toDouble.toInt).toOption,
+        personalData = getFormattedOption(datasetSheet, 51).map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq
+          .map(pd => s"https://w3c.github.io/dpv/2.0/pd#$pd")),
+        landingPage = getFormattedOption(datasetSheet, 52),
+        language = getFormattedOption(datasetSheet, 53),
+        modificationDate = getFormattedOption(datasetSheet, 54),
+        releaseDate = getFormattedOption(datasetSheet, 55),
+        otherIdentifier = getFormattedOption(datasetSheet, 56).map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq),
+        qualifiedAttribution = Try(Seq(
+          getCellStr(datasetSheet, 57).split(",", -1),
+          getCellStr(datasetSheet, 58).split(",", -1)
+        ).transpose.filter(value => value.head.nonEmpty).map {
+          case Seq(name, role) => QualifiedAttribution(name, toStringOption(role).map(r => s"https://standards.iso.org/iso/19115/resources/Codelists/gml/CI_RoleCode.xml#$r"))
+        }).toOption,
+        spatialResolution = Try(getCellStr(datasetSheet, 59).toDouble).toOption,
+        temporalCoverage = (
+          getFormattedOption(datasetSheet, 60),
+          getFormattedOption(datasetSheet, 61)
+        ) match {
+          case (None, None) => None
+          case (start, end) => Some(Period(start, end))
+        },
+        temporalResolution = getFormattedOption(datasetSheet, 62),
+        versionNotes = getFormattedOption(datasetSheet, 63),
+        wasGeneratedBy = getFormattedOption(datasetSheet, 64).map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq),
+        purpose = getFormattedOption(datasetSheet, 65)
+      ),
+      distribution = DistributionMetadataUserInput(
+        title = getFormattedOption(distSheet, 1),
+        applicableLegislation = getFormattedOption(distSheet, 2),
+        accessURL = getFormattedOption(distSheet, 3),
+        availability = getFormattedOption(distSheet, 4),
+        byteSize = Try(getCellStr(distSheet, 5).toDouble.toInt).toOption,
+        checksum = {
+          val alg = getFormattedOption(distSheet, 6)
+          val v = getFormattedOption(distSheet, 7)
+          if(alg.isDefined && v.isDefined) Some(Checksum(alg.get, v.get)) else None
+        },
+        description = getFormattedOption(distSheet, 8),
+        format = getFormattedOption(distSheet, 9),
+        license = getFormattedOption(distSheet, 10),
+        mediaType = getFormattedOption(distSheet, 11),
+        packagingFormat = getFormattedOption(distSheet, 12),
+        releaseDate = getFormattedOption(distSheet, 13),
+        rights = getFormattedOption(distSheet, 14),
+        spatialResolution = Try(getCellStr(distSheet, 15).toDouble).toOption,
+        status = getFormattedOption(distSheet, 16),
+        temporalResolution = getFormattedOption(distSheet, 17),
+        accessService = getFormattedOption(distSheet, 18)
+      ),
+      dataDictionary = if (dataDictionarySheet != null && dataDictionarySheet.getLastRowNum > 1)
+        Some((1 until dataDictionarySheet.getLastRowNum).map(row => {
+          CsvwField(
+            name = ensureNotEmpty(dataDictionarySheet.getRow(row).getCell(0).getStringCellValue, s"Data Dictionary:$row:name"),
+            title = ensureNotEmpty(dataDictionarySheet.getRow(row).getCell(1).getStringCellValue, s"Data Dictionary:$row:title"),
+            description = toStringOption(dataDictionarySheet.getRow(row).getCell(2).getStringCellValue),
+            datatype = ensureNotEmpty(dataDictionarySheet.getRow(row).getCell(3).getStringCellValue, s"Data Dictionary:$row:datatype"),
+            propertyUrl = toStringOption(dataDictionarySheet.getRow(row).getCell(4).getStringCellValue),
+            unit = toStringOption(dataDictionarySheet.getRow(row).getCell(5).getStringCellValue)
+          )
+        }).toList)
+      else None
     )
   }
 }

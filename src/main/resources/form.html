@@ -13,7 +13,7 @@
         form > .field > label { padding: 0; }
         form .field input:not([type=checkbox]), form .field select, form .field textarea { padding: .3em; border: 1px solid #d0d0d0; border-radius: .25em; }
         .info { background: #c3defa; border: 1px solid #153860; color: #153860; padding: 1em; border-radius: .5em; }
-        form .field button { padding: .5em 1em; border-radius: .25em; border: 1px solid #286015; background: #3a8121; color: white; font-size: 1.1rem; }
+        form .field button { padding: .5em 1em; border-radius: .25em; border: 1px solid #286015; background: #3a8121; color: white; font-size: 1.1rem; cursor: pointer; }
         form .field label .desc { font-size: .9em; color: #555555; font-weight: lighter; display: block; }
         form .field.hidden { display: none; }
         h2 { border-bottom: 2px solid #333; padding-bottom: 0.5rem; margin-top: 2rem; }
@@ -23,24 +23,6 @@
 <p class="info">Fill the form below and submit to proceed with RDF metadata extraction.</p>
 <form method="post" action="/form">
 
-    <h2>Technical & FDP Configuration</h2>
-    <div class="field">
-        <label>FDP URL</label>
-        <input type="url" name="fdpUrl" value="{{fdp-url}}">
-    </div>
-    <div class="field">
-        <label>FDP Email</label>
-        <input type="email" name="fdpEmail" value="{{fdp-email}}">
-    </div>
-    <div class="field">
-        <label>FDP Password</label>
-        <input type="password" name="fdpPassword" value="{{fdp-password}}">
-    </div>
-    <div class="field">
-        <label>Output Directory<i style="color: red">*</i></label>
-        <input name="outputDir" required value="{{output-dir}}">
-    </div>
-
     <h2>Catalog</h2>
     <div class="field">
         <label>Existing?</label>
@@ -48,118 +30,107 @@
     </div>
     <div class="field hidden existing-catalog-field required">
         <label>URI</label>
-        <input name="catalogUri" value="{{catalog-uri}}">
+        <input name="catalogUri" placeholder="{{catalog-uri}}">
     </div>
     <div class="field new-catalog-field required">
         <label>Title<i style="color: red">*</i></label>
-        <input name="catalogTitle" required value="{{catalog-title}}">
+        <input name="catalogTitle" required placeholder="{{catalog-title}}">
     </div>
     <div class="field new-catalog-field required">
         <label>Description<i style="color: red">*</i></label>
-        <textarea required name="catalogDescription">{{catalog-description}}</textarea>
+        <textarea required name="catalogDescription" placeholder="{{catalog-description}}"></textarea>
     </div>
     <div class="field new-catalog-field required">
         <label>Applicable Legislation<i style="color: red">*</i></label>
-        <input name="catalogApplicableLegislation" required value="{{catalog-applicable-legislation}}">
+        <input name="catalogApplicableLegislation" required placeholder="{{catalog-applicable-legislation}}">
     </div>
     <div class="field new-catalog-field">
         <label>Spatial Coverage (Catalog)</label>
         <select name="catalogSpatial">
+            <option value="" disabled selected hidden>Select a country</option>
             {{countryOptions}}
         </select>
-    </div>
-    <div class="field new-catalog-field">
-        <label>Start Date</label>
-        <input type="date" name="catalogStartDate" value="{{catalog-start-date}}">
-    </div>
-    <div class="field new-catalog-field">
-        <label>End Date</label>
-        <input type="date" name="catalogEndDate" value="{{catalog-end-date}}">
     </div>
 
     <h2>Dataset</h2>
     <div class="field">
         <label>Title<i style="color: red">*</i></label>
-        <input name="title" required value="{{title}}">
+        <input name="title" required placeholder="{{title}}">
     </div>
     <div class="field">
         <label>Version</label>
-        <input name="datasetVersion" value="{{dataset-version}}">
+        <input name="datasetVersion" placeholder="{{dataset-version}}">
     </div>
     <div class="field">
         <label>Description<i style="color: red">*</i></label>
-        <textarea required name="description">{{description}}</textarea>
+        <textarea required name="description" placeholder="{{description}}"></textarea>
     </div>
     <div class="field">
         <label>Quality Annotation<i style="color: red">*</i></label>
-        <textarea name="datasetQualityAnnotation">{{dataset-quality-annotation}}</textarea>
+        <textarea name="datasetQualityAnnotation" required placeholder="{{dataset-quality-annotation}}"></textarea>
     </div>
     <div class="field">
         <label>Theme<i style="color: red">*</i></label>
-        <select name="theme" required value="{{theme}}">{{themeOptions}}</select>
+        <select name="theme" required>
+            <option value="" disabled selected hidden>Select a theme</option>
+            {{themeOptions}}
+        </select>
     </div>
     <div class="field">
         <label>Provenance<i style="color: red">*</i></label>
-        <textarea name="provenance" required>{{provenance}}</textarea>
+        <textarea name="provenance" required placeholder="{{provenance}}"></textarea>
     </div>
     <div class="field">
         <label>
             Keyword(s)<i style="color: red">*</i>
             <span class="desc">Comma separated keywords</span>
         </label>
-        <input name="keyword" value="{{keyword}}">
+        <input name="keyword" required placeholder="{{keyword}}">
     </div>
     <div class="field">
         <label>Geographical Coverage<i style="color: red">*</i></label>
         <select name="datasetSpatial" required>
+            <option value="" disabled selected hidden>Select a country</option>
             {{countryOptions}}
         </select>
     </div>
     <div class="field">
-        <label>Temporal Coverage Start</label>
-        <input type="date" name="datasetTemporalStart" value="{{dataset-temporal-start}}">
-    </div>
-    <div class="field">
-        <label>Temporal Coverage End</label>
-        <input type="date" name="datasetTemporalEnd" value="{{dataset-temporal-end}}">
-    </div>
-    <div class="field">
         <label>Population Coverage</label>
-        <input name="populationCoverage" value="{{population-coverage}}">
+        <input name="populationCoverage" placeholder="{{population-coverage}}">
     </div>
     <div class="field">
         <label>Update Frequency</label>
         <select name="datasetFrequency">
-            <option></option>
+            <option value="" disabled selected hidden>Select a frequency</option>
             {{frequencyOptions}}
         </select>
     </div>
     <div class="field">
         <label>Identifier<i style="color: red">*</i></label>
-        <input name="identifier" value="{{identifier}}">
+        <input name="identifier" required placeholder="{{identifier}}">
     </div>
     <div class="field">
         <label>Contact Point<i style="color: red">*</i></label>
         <div class="field">
             <label>Page</label>
-            <input type="url" name="contactPage" value="{{contact-page}}">
+            <input type="url" name="contactPage" placeholder="{{contact-page}}">
         </div>
         <div class="field">
             <label>Email</label>
-            <input type="email" name="contactEmail" value="{{contact-email}}">
+            <input type="email" name="contactEmail" placeholder="{{contact-email}}">
         </div>
     </div>
 
     <div class="field">
-        <label>Publisher (Data Holder)<i style="color: red">*</i></label>
+        <label>Publisher (Data Holder)</label>
         <div class="field">
-            <label>Name<i style="color: red">*</i></label>
-            <input name="publisherName" value="{{publisher-name}}">
+            <label>Name</label>
+            <input name="publisherName" placeholder="{{publisher-name}}">
         </div>
         <div class="field">
             <label>Type</label>
             <select name="publisherType">
-                <option></option>
+                <option value="" disabled selected hidden>Select a type</option>
                 {{hdabTypeOptions}}
             </select>
         </div>
@@ -167,16 +138,16 @@
             <label>Contact Point</label>
             <div class="field">
                 <label>Page</label>
-                <input type="url" name="publisherPage" value="{{publisher-page}}">
+                <input type="url" name="publisherPage" placeholder="{{publisher-page}}">
             </div>
             <div class="field">
                 <label>Email</label>
-                <input type="email" name="publisherEmail" value="{{publisher-email}}">
+                <input type="email" name="publisherEmail" placeholder="{{publisher-email}}">
             </div>
         </div>
         <div class="field">
             <label>Trusted data holder</label>
-            <input type="checkbox" name="publisherTrusted" {{publisherTrustedChecked}}>
+            <input type="checkbox" name="publisherTrusted">
         </div>
     </div>
 
@@ -184,12 +155,12 @@
         <label>Health Data Access Body<i style="color: red">*</i></label>
         <div class="field">
             <label>Name<i style="color: red">*</i></label>
-            <input name="hdabName" value="{{hdab-name}}">
+            <input name="hdabName" required placeholder="{{hdab-name}}">
         </div>
         <div class="field">
             <label>Type</label>
             <select name="hdabType">
-                <option></option>
+                <option value="" disabled selected hidden>Select a type</option>
                 {{hdabTypeOptions}}
             </select>
         </div>
@@ -197,48 +168,52 @@
             <label>Contact Point</label>
             <div class="field">
                 <label>Page</label>
-                <input type="url" name="hdabContactPage" value="{{hdab-contact-page}}">
+                <input type="url" name="hdabContactPage" placeholder="{{hdab-contact-page}}">
             </div>
             <div class="field">
                 <label>Email</label>
-                <input type="email" name="hdabContactEmail" value="{{hdab-contact-email}}">
+                <input type="email" name="hdabContactEmail" placeholder="{{hdab-contact-email}}">
             </div>
         </div>
         <div class="field">
             <label>Note</label>
-            <textarea name="hdabNote">{{hdab-note}}</textarea>
+            <textarea name="hdabNote" placeholder="{{hdab-note}}"></textarea>
         </div>
         <div class="field">
             <label>Trusted data holder</label>
-            <input type="checkbox" name="hdabTrusted" {{hdabTrustedChecked}}>
+            <input type="checkbox" name="hdabTrusted">
         </div>
     </div>
 
     <div class="field">
         <label>Applicable Legislation<i style="color: red">*</i></label>
-        <input name="applicableLegislation" required value="{{applicable-legislation}}">
+        <input name="applicableLegislation" required placeholder="{{applicable-legislation}}">
     </div>
     <div class="field">
         <label>Access Rights<i style="color: red">*</i></label>
-        <select name="accessRights" value="{{access-rights}}" required>
+        <select name="accessRights" required>
+            <option value="" disabled selected hidden>Select access right</option>
             {{accessRightsOptions}}
         </select>
     </div>
     <div class="field">
         <label>Type<i style="color: red">*</i></label>
-        <select name="type" value="{{type}}" required>
+        <select name="type" required>
+            <option value="" disabled selected hidden>Select dataset type</option>
             {{typeOptions}}
         </select>
     </div>
     <div class="field">
         <label>Health Category<i style="color: red">*</i></label>
         <select name="healthCategory" required>
+            <option value="" disabled selected hidden>Select a health category</option>
             {{healthCategoryOptions}}
         </select>
     </div>
     <div class="field">
         <label>Health Theme<i style="color: red">*</i></label>
         <select name="healthTheme" required>
+            <option value="" disabled selected hidden>Select a health theme</option>
             {{healthThemeOptions}}
         </select>
     </div>
@@ -246,47 +221,47 @@
     <h2>Distribution</h2>
     <div class="field">
         <label>Access URL<i style="color: red">*</i></label>
-        <input required type="url" name="distributionAccessUrl" value="{{distribution-access-url}}">
+        <input required type="url" name="distributionAccessUrl" placeholder="{{distribution-access-url}}">
     </div>
     <div class="field">
-        <label>License<i style="color: red">*</i></label>
-        <input name="distributionLicense" value="{{distribution-license}}">
+        <label>License</label>
+        <input name="distributionLicense" placeholder="{{distribution-license}}">
     </div>
     <div class="field">
         <label>Applicable Legislation<i style="color: red">*</i></label>
-        <input required name="distributionApplicableLegislation" value="{{distribution-applicable-legislation}}">
+        <input required name="distributionApplicableLegislation" placeholder="{{distribution-applicable-legislation}}">
     </div>
     <div class="field">
         <label>Format</label>
-        <select name="distributionFormat" value="{{distribution-format}}">
-            <option></option>
+        <select name="distributionFormat">
+            <option value="" disabled selected hidden>Select format</option>
             {{fileTypeOptions}}
         </select>
     </div>
     <div class="field">
         <label>Description</label>
-        <input name="distributionDescription" value="{{distribution-description}}">
+        <input name="distributionDescription" placeholder="{{distribution-description}}">
     </div>
 
     <h3>Sample Distribution</h3>
     <div class="field">
         <label>Sample Title</label>
-        <input name="sampleTitle" value="{{sample-title}}">
+        <input name="sampleTitle" placeholder="{{sample-title}}">
     </div>
     <div class="field">
         <label>Sample Access URL</label>
-        <input type="url" name="sampleAccessUrl" value="{{sample-access-url}}">
+        <input type="url" name="sampleAccessUrl" placeholder="{{sample-access-url}}">
     </div>
     <div class="field">
         <label>Sample Format</label>
-        <select name="sampleFormat" value="{{sample-format}}">
-            <option></option>
+        <select name="sampleFormat">
+            <option value="" disabled selected hidden>Select format</option>
             {{fileTypeOptions}}
         </select>
     </div>
     <div class="field">
         <label>Sample Legislation</label>
-        <input name="sampleLegislation" value="{{sample-legislation}}">
+        <input name="sampleLegislation" placeholder="{{sample-legislation}}">
     </div>
 
     <div class="field" style="flex-direction: row-reverse">
@@ -308,16 +283,6 @@
             item.querySelectorAll('input,textarea').forEach(input => input.removeAttribute('required'))
         });
     }
-
-    document.querySelectorAll('select').forEach(select => {
-        if (select.getAttribute('value')) {
-            select.querySelectorAll('option').forEach(option => {
-                if (option.value === select.getAttribute("value")) {
-                    option.selected = true;
-                }
-            })
-        }
-    })
 </script>
 </body>
 </html>
