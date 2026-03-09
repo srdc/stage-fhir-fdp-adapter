@@ -13,22 +13,19 @@ object SurveyExtraction {
   /**
    * Execute the Survey Extraction pipeline.
    *
-   * @param initialConfig The base configuration object passed from the CLI.
-   * @param spark         The active SparkSession.
-   * @param sparkOnFhir   The active SparkOnFhir entry point.
+   * @param appConfig      The base application configuration object passed from the CLI.
+   * @param staticMetadata The loaded static metadata configuration (from JSON, Excel, or Browser).
+   * @param spark          The active SparkSession.
+   * @param sparkOnFhir    The active SparkOnFhir entry point.
    */
-  def run(initialConfig: Config)(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): Unit = {
+  def run(appConfig: AppConfig, staticMetadata: ConfigLoader)(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): Unit = {
     import spark.implicits._
 
-    /**
-     * Loads the full configuration based on the run mode.
-     */
-    def initializeConfig(initConfig: Config): Config = {
-      println(s"Starting up in mode: ${initConfig.runMode}")
-      val loaded = ConfigLoader.load(initConfig)
-      println(s"Config loaded. Working on dataset: ${loaded.datasetTitle}")
-      loaded
-    }
+    // Load the raw FHIR DataFrames ONCE to avoid redundant server calls
+    val rawObs = sparkOnFhir.load("Observation").cache()
+    val rawQR = sparkOnFhir.load("QuestionnaireResponse").cache()
+    val rawQ = sparkOnFhir.load("Questionnaire").cache()
+    val rawPat = sparkOnFhir.load("Patient").cache()
 
     /**
      * Extracts Observation resources from the FHIR server.
@@ -37,8 +34,7 @@ object SurveyExtraction {
      * @return A DataFrame with columns [patient_id, metric_name, final_value].
      */
     def extractObservations(): DataFrame = {
-      // Extract simple observations where value is at the root
-      val obsSimple = sparkOnFhir.load("Observation")
+      val obsSimple = rawObs
         .fcolumn("subject.getReferenceKey(Patient)", "patient_id")
         .fcolumn("effectiveDateTime", "timestamp", "string")
         .fcolumn("code.coding.display.first()", "metric_name")
@@ -55,8 +51,7 @@ object SurveyExtraction {
         )
         .select($"patient_id", $"metric_name".cast("string"), $"final_value".cast("string"))
 
-      // Extract component-based observations
-      val obsComponents = sparkOnFhir.load("Observation")
+      val obsComponents = rawObs
         .where("component IS NOT NULL")
         .fcolumn("subject.getReferenceKey(Patient)", "patient_id")
         .fforEach("component", comp =>
@@ -85,8 +80,7 @@ object SurveyExtraction {
      * @return A tuple containing the survey DataFrame, column order sequence, and extracted vocabularies.
      */
     def extractSurveys(): (DataFrame, Seq[String], Map[String, Map[String, String]]) = {
-      // Load patient responses
-      val rawResponses = sparkOnFhir.load("QuestionnaireResponse")
+      val rawResponses = rawQR
         .fcolumn("subject.getReferenceKey(Patient)", "patient_id")
         .fcolumn("questionnaire", "questionnaire_ref")
         .frepeat(
@@ -101,7 +95,6 @@ object SurveyExtraction {
         )
         .extract()
 
-      // Extract unique Questionnaire IDs from responses
       val usedQuestionnaireIds = rawResponses
         .select(element_at(split($"questionnaire_ref", "/"), -1).as("q_id"))
         .where($"q_id".isNotNull)
@@ -109,8 +102,7 @@ object SurveyExtraction {
         .as[String]
         .collect()
 
-      // Load matching Questionnaire definitions
-      val rawDefinitions = sparkOnFhir.load("Questionnaire")
+      val rawDefinitions = rawQ
         .where($"id".isInCollection(usedQuestionnaireIds))
         .frepeat(
           _
@@ -124,7 +116,6 @@ object SurveyExtraction {
         )
         .extract()
 
-      // Flatten definition options for lookup
       val flatDefinitions = rawDefinitions
         .select(
           $"question_id",
@@ -138,7 +129,6 @@ object SurveyExtraction {
         .distinct()
         .cache()
 
-      // Build vocabularies map for metadata generation
       val vocabRows = flatDefinitions
         .where($"question_id".isNotNull && $"opt_code".isNotNull && $"opt_display".isNotNull)
         .select("question_id", "opt_code", "opt_display")
@@ -151,7 +141,6 @@ object SurveyExtraction {
           qid -> rows.map(r => r.getString(1) -> r.getString(2)).toMap
         }
 
-      // Determine standardized column text
       val defText = flatDefinitions.select("question_id", "text_def").distinct()
       val respText = rawResponses.select("question_id", "text_resp").distinct()
 
@@ -166,12 +155,10 @@ object SurveyExtraction {
 
       val orderedColumns = allQuestions.flatMap { case (id, text) => Seq(id, text) }
 
-      // Create coded values DataFrame
       val codes = rawResponses
         .where($"val_code".isNotNull && $"question_id".isNotNull)
         .select($"patient_id", $"question_id".as("metric_name"), $"val_code".as("final_value"))
 
-      // Create human-readable values DataFrame
       val defOptions = flatDefinitions
         .where($"opt_code".isNotNull)
         .select($"question_id", $"opt_code".as("val_code"), $"opt_display")
@@ -214,13 +201,15 @@ object SurveyExtraction {
 
     /**
      * Calculates statistical metadata for the Dataset description.
+     * Extracts age aggregates, row counts, temporal coverages, and coding systems directly from the FHIR resources.
      *
      * @param finalProfileDf The processed patient profile DataFrame.
      * @param vocabularies   The extracted SKOS vocabularies.
-     * @return A DatasetStats object containing counts and age ranges.
+     * @return A DatasetStats object containing counts, age ranges, dates, and dynamically extracted coding systems.
      */
     def computeDatasetStats(finalProfileDf: DataFrame, vocabularies: Map[String, Map[String, String]]): DatasetStats = {
-      val patients = sparkOnFhir.load("Patient")
+      // 1. Patient Age Aggregation
+      val patients = rawPat
         .fcolumn("id", "patient_id")
         .fcolumn("birthDate", "birthDate")
         .extract()
@@ -238,30 +227,75 @@ object SurveyExtraction {
       val minAge = if (ageStats.isNullAt(0)) 0 else ageStats.getInt(0)
       val maxAge = if (ageStats.isNullAt(1)) 0 else ageStats.getInt(1)
 
+      // 2. Profile Coverage
       val recordCount = finalProfileDf.count()
       val uniquePatients = finalProfileDf.select("patient_id").distinct().count()
       val columnInfo = finalProfileDf.schema.fields.map(f => (f.name, f.dataType.toString))
 
-      DatasetStats(recordCount, uniquePatients, minAge, maxAge, columnInfo, vocabularies)
+      // 3. Temporal Coverage (QuestionnaireResponse authored dates)
+      val qrDates = rawQR
+        .fcolumn("authored", "authored", "string")
+        .extract()
+        .where(col("authored").isNotNull)
+        .withColumn("dateOnly", substring(col("authored"), 1, 10))
+        .agg(min("dateOnly").as("startDate"), max("dateOnly").as("endDate"))
+        .collect()
+
+      val startDate = if (qrDates.isEmpty || qrDates(0).isNullAt(0)) None else Some(qrDates(0).getString(0))
+      val endDate = if (qrDates.isEmpty || qrDates(0).isNullAt(1)) None else Some(qrDates(0).getString(1))
+
+      // 4. Extract Unique Coding Systems across all levels of the FHIR resources
+      // Uses a UDF to stringify the row into JSON and regex extract all "system" values
+      val extractSystemsUDF = udf((jsonStr: String) => {
+        if (jsonStr == null) Seq.empty[String]
+        else {
+          val pattern = """"system"\s*:\s*"([^"]+)"""".r
+          pattern.findAllMatchIn(jsonStr).map(_.group(1)).toSeq
+        }
+      })
+
+      val allRawDfs = Seq(rawObs, rawQR, rawQ, rawPat)
+      val extractedSystems = allRawDfs.map { df =>
+          df.select(explode(extractSystemsUDF(to_json(struct(col("*"))))).as("system"))
+        }.reduce(_ union _)
+        .distinct()
+        .where($"system".isNotNull && $"system" =!= "")
+        .as[String]
+        .collect()
+        .toSeq
+
+      DatasetStats(recordCount, uniquePatients, minAge, maxAge, columnInfo, vocabularies, startDate, endDate, extractedSystems)
     }
 
     /**
      * Exports the results to disk and triggers metadata generation.
+     *
+     * @param cfg    The application configuration containing export and FDP settings.
+     * @param meta   The static metadata configuration loader.
+     * @param dataDf The finalized patient profile DataFrame to save as CSV.
+     * @param stats  The dynamically extracted Dataset statistics.
      */
-    def exportResults(cfg: Config, dataDf: DataFrame, stats: DatasetStats): Unit = {
+    def exportResults(cfg: AppConfig, meta: ConfigLoader, dataDf: DataFrame, stats: DatasetStats): Unit = {
       FileUtils.saveData(dataDf, s"${cfg.outputDir}/patient_profiles", "csv")
       println(s"Saved patient data to: ${cfg.outputDir}/patient_profiles")
-      MetadataWriter.exportResults(cfg, stats)
+
+      MetadataWriter.exportResults(
+        outputDir = cfg.outputDir,
+        fdpUrl = cfg.fdpUrl.getOrElse(""),
+        fdpEmail = cfg.fdpEmail.getOrElse(""),
+        fdpPassword = cfg.fdpPassword.getOrElse(""),
+        meta = meta,
+        stats = stats,
+        runMode = cfg.runMode
+      )
     }
 
-    val config = initializeConfig(initialConfig)
     val observations = extractObservations()
-
     val (surveys, columnOrder, vocabularies) = extractSurveys()
 
     val patientProfiles = computePatientProfiles(observations, surveys, columnOrder)
     val stats = computeDatasetStats(patientProfiles, vocabularies)
 
-    exportResults(config, patientProfiles, stats)
+    exportResults(appConfig, staticMetadata, patientProfiles, stats)
   }
 }
