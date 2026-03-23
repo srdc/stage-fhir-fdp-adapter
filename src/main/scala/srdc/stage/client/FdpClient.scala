@@ -1,9 +1,13 @@
+package srdc.stage.client
+
 import org.apache.jena.rdf.model.Model
 import org.apache.jena.riot.{Lang, RDFDataMgr}
+import org.slf4j.LoggerFactory
+
 import java.io.ByteArrayOutputStream
 import java.net.URI
-import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import java.net.http.HttpRequest.BodyPublishers
+import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import java.nio.charset.StandardCharsets
 import scala.util.matching.Regex
 
@@ -15,6 +19,8 @@ import scala.util.matching.Regex
  * of Jena Models to Turtle format and the management of HTTP headers.
  */
 object FdpClient {
+
+  private val logger = LoggerFactory.getLogger(getClass)
 
   /**
    * Represents the result of an HTTP POST operation to the FDP.
@@ -94,7 +100,7 @@ object FdpClient {
     val token = getToken(baseUrl, email, password)
     val turtle = serializeModelAsTurtle(model)
 
-    println(s"Posting to FDP endpoint: $prefix")
+    logger.info("Posting to FDP endpoint: {}", prefix)
 
     val targetUri = URI.create(s"${stripTrailingSlash(baseUrl)}/$prefix")
 

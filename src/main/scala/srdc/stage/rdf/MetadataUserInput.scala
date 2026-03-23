@@ -1,4 +1,8 @@
+package srdc.stage.rdf
+
 import com.sun.net.httpserver.{HttpExchange, HttpHandler, HttpServer}
+import srdc.stage.config.AppConfig
+
 import java.net.InetSocketAddress
 import java.awt.Desktop
 import java.net.URI
@@ -9,6 +13,9 @@ import scala.io.Source
 import org.apache.poi.ss.usermodel.{Cell, DataFormatter, Workbook, WorkbookFactory}
 import org.apache.poi.ss.usermodel.Row.MissingCellPolicy
 import io.onfhir.feast.parsers.JsonFormatter
+import org.slf4j.LoggerFactory
+import srdc.stage.vocab.PubEU
+
 import scala.util.Try
 
 case class Agent(name: String, email: Option[String] = None, `type`: Option[String] = None)
@@ -109,7 +116,7 @@ case class DatasetMetadataUserInput(
 
 case class CsvwField(name: String, title: String, datatype: String, description: Option[String] = None, propertyUrl: Option[String] = None, unit: Option[String] = None)
 
-case class ConfigLoader(
+case class MetadataUserInput(
                          catalog: CatalogMetadataUserInput,
                          dataset: DatasetMetadataUserInput,
                          distribution: DistributionMetadataUserInput,
@@ -120,7 +127,9 @@ case class ConfigLoader(
  * Utility object for loading the application configuration.
  * Supports three modes: JSON file, Excel file, or an interactive Browser-based form.
  */
-object ConfigLoader {
+object MetadataUserInput {
+
+  private val logger = LoggerFactory.getLogger(getClass)
 
   val SUCCESS_HTML = """<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Success</title></head><body style="font-family: sans-serif; text-align: center; margin-top: 50px;"><h1>Configuration Received!</h1><p>You can close this tab and return to your terminal.</p><script>setTimeout(() => window.close(), 2000)</script></body></html>"""
 
@@ -131,7 +140,7 @@ object ConfigLoader {
    * @param appConfig The initial application configuration (usually from CLI args).
    * @return A fully populated ConfigLoader object.
    */
-  def load(appConfig: AppConfig): ConfigLoader = {
+  def load(appConfig: AppConfig): MetadataUserInput = {
     appConfig.runMode.toLowerCase match {
       case "json" => loadFromJson(appConfig)
       case "excel" => loadFromExcel(appConfig)
@@ -146,10 +155,12 @@ object ConfigLoader {
    * @param appConfig Configuration containing the JSON path.
    * @return ConfigLoader object parsed from JSON.
    */
-  private def loadFromJson(appConfig: AppConfig): ConfigLoader = {
-    println(s"Loading static metadata from JSON: ${appConfig.jsonPath}")
-    val jsonContent = Source.fromFile(appConfig.jsonPath).mkString
-    Try(JsonFormatter.fromJson[ConfigLoader](jsonContent))
+  private def loadFromJson(appConfig: AppConfig): MetadataUserInput = {
+    logger.info("Loading static metadata from JSON: {}", appConfig.jsonPath)
+    val source = Source.fromFile(appConfig.jsonPath)
+    val jsonContent = source.mkString
+    source.close()
+    Try(JsonFormatter.fromJson[MetadataUserInput](jsonContent))
       .getOrElse(throw new IllegalArgumentException("Invalid JSON metadata file!"))
   }
 
@@ -159,8 +170,8 @@ object ConfigLoader {
    * @param appConfig Configuration containing the Excel path.
    * @return ConfigLoader object parsed from Excel.
    */
-  private def loadFromExcel(appConfig: AppConfig): ConfigLoader = {
-    println(s"Loading static metadata from Excel: ${appConfig.excelPath}")
+  private def loadFromExcel(appConfig: AppConfig): MetadataUserInput = {
+    logger.info("Loading static metadata from Excel: {}", appConfig.excelPath)
     val file = new File(appConfig.excelPath)
     val wb = WorkbookFactory.create(file)
     val metadata = fromExcel(wb)
@@ -175,8 +186,8 @@ object ConfigLoader {
    * @param appConfig Default application configuration values to pre-fill the form (e.g., FDP URL, Output Dir).
    * @return The updated ConfigLoader object submitted by the user.
    */
-  private def loadFromBrowser(appConfig: AppConfig): ConfigLoader = {
-    println("Fetching EU Vocabularies. This might take a few seconds...")
+  private def loadFromBrowser(appConfig: AppConfig): MetadataUserInput = {
+    logger.info("Fetching EU Vocabularies. This might take a few seconds...")
 
     val healthCategories = Map(
       "http://13.81.34.152:1101/resource/authority/healthcategories/NRPE" -> "Aggregated data on healthcare needs, resources allocated to healthcare, the provision of and access to healthcare, healthcare expenditure and financing",
@@ -272,7 +283,7 @@ object ConfigLoader {
     // Scrub all unused placeholders
     htmlContent = htmlContent.replaceAll("\\{\\{[^}]+\\}\\}", "")
 
-    var resultConfig: Option[ConfigLoader] = None
+    var resultConfig: Option[MetadataUserInput] = None
     val server = HttpServer.create(new InetSocketAddress(0), 0)
 
     server.createContext("/", new HttpHandler {
@@ -306,7 +317,7 @@ object ConfigLoader {
     server.setExecutor(null)
     server.start()
     val url = s"http://localhost:${server.getAddress.getPort}"
-    println(s"Waiting for browser input. Form launched at: $url")
+    logger.info(s"Waiting for browser input. Form launched at: {}", url)
 
     if (Desktop.isDesktopSupported) {
       Desktop.getDesktop.browse(new URI(url))
@@ -317,7 +328,7 @@ object ConfigLoader {
     }
 
     server.stop(0)
-    println("Browser form successfully mapped!")
+    logger.info("Browser form successfully mapped!")
     resultConfig.get
   }
 
@@ -328,7 +339,7 @@ object ConfigLoader {
    * @param formData Map containing form field names and values.
    * @return A new ConfigLoader instance reflecting the form data.
    */
-  def fromFormData(formData: Map[String, String]): ConfigLoader = {
+  def fromFormData(formData: Map[String, String]): MetadataUserInput = {
     def getOpt(key: String): Option[String] = formData.get(key).filter(_.trim.nonEmpty)
     def getBool(key: String): Option[Boolean] = formData.get(key).map(_ == "on")
     def reqStr(key: String, name: String): String = getOpt(key).getOrElse(throw new IllegalArgumentException(s"$name is required"))
@@ -350,7 +361,7 @@ object ConfigLoader {
       trusted = getBool("hdabTrusted")
     )
 
-    ConfigLoader(
+    MetadataUserInput(
       catalog = CatalogMetadataUserInput(
         existing = getBool("existingCatalog"),
         uri = getOpt("catalogUri"),
@@ -409,7 +420,7 @@ object ConfigLoader {
    * @param wb The active Excel Workbook instance.
    * @return A fully populated ConfigLoader instance based on Excel inputs.
    */
-  def fromExcel(wb: Workbook): ConfigLoader = {
+  def fromExcel(wb: Workbook): MetadataUserInput = {
     def toStringOption(str: String) = str.trim match {
       case s if s.isEmpty => None
       case s => Some(s)
@@ -462,7 +473,7 @@ object ConfigLoader {
     val pubEmail = getFormattedOption(datasetSheet, 16)
     if (pubPage.isEmpty && pubEmail.isEmpty) throw new IllegalArgumentException("Dataset Publisher requires at least one of contact page or email.")
 
-    ConfigLoader(
+    MetadataUserInput(
       catalog = CatalogMetadataUserInput(
         existing = existingVal,
         uri = uriVal,

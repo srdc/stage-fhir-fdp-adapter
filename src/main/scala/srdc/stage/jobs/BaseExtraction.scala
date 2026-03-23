@@ -1,0 +1,132 @@
+package srdc.stage.jobs
+
+import io.onfhir.spark.SparkOnFhir
+import io.onfhir.spark.SparkOnFhirConversions._
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.slf4j.{Logger, LoggerFactory}
+import srdc.stage.config.AppConfig
+import srdc.stage.rdf.{DatasetStats, MetadataUserInput, MetadataWriter}
+import srdc.stage.util.FileUtils
+
+abstract class BaseExtraction {
+
+  protected val logger: Logger
+
+  def run(appConfig: AppConfig, staticMetadata: MetadataUserInput)(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): Unit
+
+  protected def loadPatients()(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): DataFrame =
+    sparkOnFhir.load("Patient?_searchafter").cache()
+
+  protected def computePatientProfiles(
+                                        dataDf: DataFrame,
+                                        orderedCols: Seq[String]
+                                      )(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): DataFrame = {
+    dataDf
+      .where(col("final_value").isNotNull)
+      .groupBy("patient_id")
+      .pivot("metric_name", orderedCols)
+      .agg(first("final_value"))
+  }
+
+  protected def computeDatasetStats(
+                                     finalProfileDf: DataFrame,
+                                     rawPatients: DataFrame,
+                                     rawResources: Seq[DataFrame],
+                                     vocabularies: Map[String, Map[String, String]],
+                                     dateSourceDf: Option[DataFrame] = None,
+                                     dateColumn: Option[String] = None
+                                   )(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): DatasetStats = {
+    import spark.implicits._
+
+    val patients = rawPatients
+      .fcolumn("id", "patient_id")
+      .fcolumn("birthDate", "birthDate")
+      .extract()
+      .select("patient_id", "birthDate")
+
+    val currentYear = java.time.LocalDate.now().getYear
+
+    val ageStats = patients
+      .withColumn("birthYear", substring(col("birthDate"), 0, 4).cast("int"))
+      .where(col("birthYear").isNotNull)
+      .withColumn("age", lit(currentYear) - col("birthYear"))
+      .agg(min("age").as("minAge"), max("age").as("maxAge"))
+      .collect()(0)
+
+    val minAge = if (ageStats.isNullAt(0)) 0 else ageStats.getInt(0)
+    val maxAge = if (ageStats.isNullAt(1)) 0 else ageStats.getInt(1)
+
+    val recordCount = finalProfileDf.count()
+    val uniquePatients = finalProfileDf.select("patient_id").distinct().count()
+    val columnInfo = finalProfileDf.schema.fields.map(f => (f.name, f.dataType.toString))
+
+    val (startDate, endDate) =
+      (dateSourceDf, dateColumn) match {
+        case (Some(df), Some(dc)) =>
+          val rows = df
+            .fcolumn(dc, dc, "string")
+            .extract()
+            .where(col(dc).isNotNull)
+            .withColumn("dateOnly", substring(col(dc), 1, 10))
+            .agg(min("dateOnly").as("startDate"), max("dateOnly").as("endDate"))
+            .collect()
+
+          val start = if (rows.isEmpty || rows(0).isNullAt(0)) None else Some(rows(0).getString(0))
+          val end = if (rows.isEmpty || rows(0).isNullAt(1)) None else Some(rows(0).getString(1))
+          (start, end)
+
+        case _ => (None, None)
+      }
+
+    val extractSystemsUDF = udf((jsonStr: String) => {
+      if (jsonStr == null) Seq.empty[String]
+      else {
+        val pattern = """"system"\s*:\s*"([^"]+)"""".r
+        pattern.findAllMatchIn(jsonStr).map(_.group(1)).toSeq
+      }
+    })
+
+    val extractedSystems = rawResources.map { df =>
+        df.select(explode(extractSystemsUDF(to_json(struct(col("*"))))).as("system"))
+      }.reduce(_ union _)
+      .distinct()
+      .where(col("system").isNotNull && col("system") =!= "")
+      .as[String]
+      .collect()
+      .toSeq
+
+    DatasetStats(
+      recordCount,
+      uniquePatients,
+      minAge,
+      maxAge,
+      columnInfo,
+      vocabularies,
+      startDate,
+      endDate,
+      extractedSystems
+    )
+  }
+
+  protected def exportResults(
+                               cfg: AppConfig,
+                               meta: MetadataUserInput,
+                               dataDf: DataFrame,
+                               stats: DatasetStats,
+                               subFolder: String
+                             ): Unit = {
+    FileUtils.saveData(dataDf, s"${cfg.outputDir}/$subFolder", "csv")
+    logger.info("Saved patient data to: {}/{}", cfg.outputDir, subFolder)
+
+    MetadataWriter.exportResults(
+      outputDir = s"${cfg.outputDir}/$subFolder/rdf",
+      fdpUrl = cfg.fdpUrl.getOrElse(""),
+      fdpEmail = cfg.fdpEmail.getOrElse(""),
+      fdpPassword = cfg.fdpPassword.getOrElse(""),
+      meta = meta,
+      stats = stats,
+      runMode = cfg.runMode
+    )
+  }
+}

@@ -1,6 +1,11 @@
+package srdc.stage.util
+
 import org.apache.spark.sql.{DataFrame, SaveMode}
+import org.slf4j.LoggerFactory
 
 object FileUtils {
+
+  private val logger = LoggerFactory.getLogger(getClass)
 
   /**
    * Persists a DataFrame to the specified path in the requested format.
@@ -13,6 +18,6 @@ object FileUtils {
     val writer = df.write.mode(SaveMode.Overwrite)
     if (format == "csv") writer.option("header", "true")
     writer.format(format).save(path)
-    println(s"Data saved to: $path")
+    logger.info("Data saved to: {}", path)
   }
 }

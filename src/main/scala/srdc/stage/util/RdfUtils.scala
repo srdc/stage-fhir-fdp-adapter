@@ -1,4 +1,6 @@
-import org.apache.jena.rdf.model.{Model}
+package srdc.stage.util
+
+import org.apache.jena.rdf.model.Model
 import org.apache.jena.riot.{Lang, RDFDataMgr}
 
 import java.io.FileOutputStream

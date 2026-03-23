@@ -1,6 +1,6 @@
 <project>
   <modelVersion>4.0.0</modelVersion>
-  <groupId>io.onfhir.example</groupId>
+  <groupId>srdc.stage</groupId>
   <artifactId>stage-fhir-fdp-adapter_2.13</artifactId>
   <version>1.0.0</version>
 
@@ -117,7 +117,7 @@
                 </transformer>
 
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                  <mainClass>StageDatasetFactory</mainClass>
+                  <mainClass>srdc.stage.DataExtractionCLI</mainClass>
                 </transformer>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
               </transformers>
