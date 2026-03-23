@@ -99,7 +99,7 @@ You can customize the job type, output format, configuration mode, and directly 
 
 | Argument | Default | Description |
 | --- | --- | --- |
-| `--job` | `survey` | The ETL pipeline to run. Currently supports `survey` (Healthy Aging). Can be extended for other cohorts. |
+| `--job` | `survey` | The ETL pipeline to run. Supports: `survey`, `observation` or `full` extraction (Can be extended for cohorts) |
 | `--format` | `csv` | The output format for the patient data (`csv` or `parquet`). |
 | `--runMode` | `browser` | How the app loads metadata configuration (`json`, `excel`, or `browser`). |
 | `--fhirUrl` | *(from conf)* | Override the source FHIR server URL. |
