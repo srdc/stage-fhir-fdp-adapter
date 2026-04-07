@@ -4,7 +4,7 @@ import io.onfhir.spark.SparkOnFhir
 import io.onfhir.spark.SparkOnFhirConversions._
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.{DataFrame, SparkSession}
-import org.slf4j.{Logger, LoggerFactory}
+import org.slf4j.Logger
 import srdc.stage.config.AppConfig
 import srdc.stage.rdf.{DatasetStats, MetadataUserInput, MetadataWriter}
 import srdc.stage.util.FileUtils
@@ -13,7 +13,7 @@ abstract class BaseExtraction {
 
   protected val logger: Logger
 
-  def run(appConfig: AppConfig, staticMetadata: MetadataUserInput)(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): Unit
+  def extractDataAndStats(appConfig: AppConfig, staticMetadata: MetadataUserInput)(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): (DataFrame, DatasetStats, String)
 
   protected def loadPatients()(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): DataFrame =
     sparkOnFhir.load("Patient?_searchafter").cache()
@@ -103,19 +103,23 @@ abstract class BaseExtraction {
       maxAge,
       columnInfo,
       vocabularies,
+      Map.empty[String, String],
       startDate,
       endDate,
       extractedSystems
     )
   }
 
-  protected def exportResults(
-                               cfg: AppConfig,
-                               meta: MetadataUserInput,
-                               dataDf: DataFrame,
-                               stats: DatasetStats,
-                               subFolder: String
-                             ): Unit = {
+  def exportResultsWithState(
+                              cfg: AppConfig,
+                              meta: MetadataUserInput,
+                              dataDf: DataFrame,
+                              jobStats: DatasetStats,
+                              globalStats: DatasetStats,
+                              subFolder: String,
+                              catalogUri: Option[String]
+                            ): String = {
+
     FileUtils.saveData(dataDf, s"${cfg.outputDir}/$subFolder", "csv")
     logger.info("Saved patient data to: {}/{}", cfg.outputDir, subFolder)
 
@@ -125,8 +129,10 @@ abstract class BaseExtraction {
       fdpEmail = cfg.fdpEmail.getOrElse(""),
       fdpPassword = cfg.fdpPassword.getOrElse(""),
       meta = meta,
-      stats = stats,
-      runMode = cfg.runMode
+      jobStats = jobStats,
+      globalStats = globalStats,
+      runMode = cfg.runMode,
+      sharedCatalogUri = catalogUri
     )
   }
 }

@@ -6,8 +6,7 @@ import org.apache.spark.sql.functions._
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.slf4j.{Logger, LoggerFactory}
 import srdc.stage.config.AppConfig
-import srdc.stage.rdf.{DatasetStats, MetadataUserInput, MetadataWriter}
-import srdc.stage.util.FileUtils
+import srdc.stage.rdf.{DatasetStats, MetadataUserInput}
 
 /**
  * Main ETL pipeline for extracting Survey and Observation data.
@@ -66,14 +65,14 @@ object ObservationExtraction extends BaseExtraction {
   }
 
   /**
-   * Execute the Survey Extraction pipeline.
+   * Execute the Observation Extraction pipeline.
    *
    * @param appConfig      The base application configuration object passed from the CLI.
    * @param staticMetadata The loaded static metadata configuration (from JSON, Excel, or Browser).
    * @param spark          The active SparkSession.
    * @param sparkOnFhir    The active SparkOnFhir entry point.
    */
-  override def run(appConfig: AppConfig, staticMetadata: MetadataUserInput)(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): Unit = {
+  override def extractDataAndStats(appConfig: AppConfig, staticMetadata: MetadataUserInput)(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): (DataFrame, DatasetStats, String) = {
     import spark.implicits._
 
     // Load the raw FHIR DataFrames ONCE to avoid redundant server calls
@@ -94,6 +93,6 @@ object ObservationExtraction extends BaseExtraction {
       dateColumn = Some("effectiveDateTime")
     )
 
-    exportResults(appConfig, staticMetadata, patientProfiles, stats, "observation_profiles")
+    (patientProfiles, stats, "observation_profiles")
   }
 }

@@ -6,31 +6,22 @@ import org.apache.spark.sql.functions._
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.slf4j.{Logger, LoggerFactory}
 import srdc.stage.config.AppConfig
-import srdc.stage.rdf.{DatasetStats, MetadataUserInput, MetadataWriter}
-import srdc.stage.util.FileUtils
+import srdc.stage.rdf.{DatasetStats, MetadataUserInput}
 
-/**
- * Main ETL pipeline for extracting Survey and Observation data.
- * Orchestrates configuration loading, resource extraction, profile generation,
- * metadata calculation, and final export.
- */
 object SurveyExtraction extends BaseExtraction {
 
   override protected val logger: Logger = LoggerFactory.getLogger(getClass)
 
-  override def run(appConfig: AppConfig, staticMetadata: MetadataUserInput)
-         (implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): Unit = {
-    import spark.implicits._
-
+  override def extractDataAndStats(appConfig: AppConfig, staticMetadata: MetadataUserInput)(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): (DataFrame, DatasetStats, String) = {
     val rawQR = sparkOnFhir.load("QuestionnaireResponse?_searchafter").cache()
     val rawQ = sparkOnFhir.load("Questionnaire?_searchafter").cache()
     val rawPat = loadPatients()
 
-    val (surveys, surveyCols, vocabularies) = extractSurveys(rawQR, rawQ)
+    val (surveys, surveyCols, vocabularies, columnMapping) = extractSurveys(rawQR, rawQ)
 
     val patientProfiles = computePatientProfiles(surveys, surveyCols)
 
-    val stats = computeDatasetStats(
+    val baseStats = computeDatasetStats(
       finalProfileDf = patientProfiles,
       rawPatients = rawPat,
       rawResources = Seq(rawQR, rawQ, rawPat),
@@ -39,13 +30,15 @@ object SurveyExtraction extends BaseExtraction {
       dateColumn = Some("authored")
     )
 
-    exportResults(appConfig, staticMetadata, patientProfiles, stats, "survey_profiles")
+    val stats = baseStats.copy(columnToVocabId = columnMapping)
+
+    (patientProfiles, stats, "survey_profiles")
   }
 
   def extractSurveys(
                               rawQR: DataFrame,
                               rawQ: DataFrame
-                            )(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): (DataFrame, Seq[String], Map[String, Map[String, String]]) = {
+                            )(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): (DataFrame, Seq[String], Map[String, Map[String, String]], Map[String, String]) = {
     import spark.implicits._
 
     val rawResponses = rawQR
@@ -123,6 +116,10 @@ object SurveyExtraction extends BaseExtraction {
 
     val orderedColumns = allQuestions.map(_._2).toSeq
 
+    val allQuestionsDf = spark.createDataFrame(allQuestions).toDF("question_id", "final_text")
+
+    val columnMapping = allQuestions.map { case (qid, text) => text -> qid }.toMap
+
       val codes = rawResponses
         .where($"val_code".isNotNull && $"question_id".isNotNull)
         .select($"patient_id", $"question_id".as("metric_name"), $"val_code".as("final_value"))
@@ -131,8 +128,6 @@ object SurveyExtraction extends BaseExtraction {
         .where($"opt_code".isNotNull)
         .select($"question_id", $"opt_code".as("val_code"), $"opt_display")
         .distinct()
-
-    val allQuestionsDf = spark.createDataFrame(allQuestions).toDF("question_id", "final_text")
 
       val displays = rawResponses
         .join(defOptions, Seq("question_id", "val_code"), "left")
@@ -145,6 +140,6 @@ object SurveyExtraction extends BaseExtraction {
           $"resolved_value".as("final_value")
         )
 
-    (codes.union(displays), orderedColumns, vocabularies)
+    (codes.union(displays), orderedColumns, vocabularies, columnMapping)
   }
 }
