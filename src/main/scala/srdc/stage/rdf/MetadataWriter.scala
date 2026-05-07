@@ -648,4 +648,62 @@ object MetadataWriter {
     }
     m
   }
+
+  /**
+   * Creates a standalone Dictionary RDF Model from parsed Data Dictionary fields.
+   * Generates a CSVW TableGroup describing each variable with its metadata.
+   * (name, title, datatype, description, propertyUrl, unit)
+   *
+   * Used by the "dictionary" job to produce a Dictionary.ttl without requiring any FHIR extraction or Dataset/Distribution context.
+   * @param fields The list of CsvwField entries parsed from the Data Dictionary Excel sheet.
+   * @param vocabularies Map of variable name to its code -> display pairs from Value Sets sheet.
+   * @return A populated Jena Model representing the dictionary as a CSVW schema with SKOS vocabularies.
+   */
+  def createDictionaryModel(fields: List[CsvwField], vocabularies: Map[String, Map[String, String]] = Map.empty): Model = {
+    val m = createModel()
+    val qudtUnit = m.createProperty("http://qudt.org/schema/qudt/unit")
+
+    val tableGroup = m.createResource(s"urn:uuid:${UUID.randomUUID()}")
+      .addProperty(RDF.`type`, CSVW.TableGroup)
+      .addProperty(DCTerms.title, m.createLiteral("Data Dictionary Schema", "en"))
+      .addProperty(DCTerms.description, m.createLiteral("CSVW schema describing the variables defined in the data dictionary.", "en"))
+
+    val table = m.createResource(s"urn:uuid:${UUID.randomUUID()}")
+      .addProperty(RDF.`type`, CSVW.Table)
+      .addProperty(DCTerms.title, m.createLiteral("Variable Definitions", "en"))
+
+    tableGroup.addProperty(CSVW.table, table)
+
+    fields.foreach { f =>
+      val col = m.createResource(s"urn:uuid:${UUID.randomUUID()}")
+        .addProperty(RDF.`type`, CSVW.Column)
+
+      col.addProperty(CSVW.name, m.createTypedLiteral(f.name, XSDDatatype.XSDstring))
+      col.addProperty(CSVW.titles, m.createLiteral(f.title, "en"))
+      col.addProperty(CSVW.datatype, m.createTypedLiteral(f.datatype, XSDDatatype.XSDstring))
+      f.description.foreach(d => col.addProperty(DCTerms.description, m.createLiteral(d, "en")))
+      f.propertyUrl.filter(_.nonEmpty).foreach(p => col.addProperty(CSVW.propertyURL, m.createResource(p)))
+      f.unit.filter(_.nonEmpty).foreach(u => col.addProperty(qudtUnit, u))
+
+      table.addProperty(CSVW.column, col)
+    }
+
+    // Embed SKOS ConceptSchemes for variables with value sets (same pattern as createConceptSchemes)
+    vocabularies.foreach { case (varName, options) =>
+      val schemeUri = s"$VOCAB_BASE/$varName"
+      val scheme = m.createResource(schemeUri)
+        .addProperty(RDF.`type`, SKOS.ConceptScheme)
+        .addProperty(DCTerms.title, s"Vocabulary for $varName")
+
+      options.foreach { case (code, display) =>
+        val concept = m.createResource(s"$schemeUri/$code")
+          .addProperty(RDF.`type`, SKOS.Concept)
+          .addProperty(SKOS.inScheme, scheme)
+          .addProperty(SKOS.notation, code)
+          .addProperty(SKOS.prefLabel, m.createLiteral(display, "en"))
+        scheme.addProperty(SKOS.hasTopConcept, concept)
+      }
+    }
+    m
+  }
 }

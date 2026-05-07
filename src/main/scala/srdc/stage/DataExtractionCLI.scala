@@ -4,8 +4,8 @@ import io.onfhir.spark.{FhirApiSource, FhirPagination, FhirPaginationMethods, Sp
 import org.apache.spark.sql.SparkSession
 import srdc.stage.config.{AppConfig, CommandLineArgumentParser}
 import org.slf4j.{Logger, LoggerFactory}
-import srdc.stage.jobs.{FullExtraction, ObservationExtraction, SurveyExtraction}
-import srdc.stage.rdf.{DatasetStats, MetadataUserInput}
+import srdc.stage.jobs.{DictionaryGeneration, FullExtraction, ObservationExtraction, SurveyExtraction}
+import srdc.stage.rdf.{CatalogMetadataUserInput, DatasetStats, MetadataUserInput}
 
 /**
  * Factory object responsible for bootstrapping the application.
@@ -41,7 +41,11 @@ object DataExtractionCLI {
     val jobs = config.jobType.split(",").map(_.trim.toLowerCase)
     logger.info(s"Initiating extraction pipelines for ${jobs.length} module(s): ${jobs.mkString(", ").toUpperCase}")
 
-    val staticMetadata = MetadataUserInput.load(config)
+    // Handle Dictionary generation from excel without unnecessary initialization of Spark
+    if (jobs.length == 1 && jobs.head == "dictionary") {
+      DictionaryGeneration.run(config)
+      System.exit(0)
+    }
 
     implicit val spark: SparkSession = SparkSession.builder()
       .appName(s"healthy-aging-${config.jobType.replace(",", "-")}")
@@ -74,15 +78,18 @@ object DataExtractionCLI {
         } else fhirApiSource
       )
 
+    var sharedCatalog: Option[CatalogMetadataUserInput] = None
     val extractions = jobs.flatMap { jobName =>
       logger.info(s"Extracting features from FHIR for module: $jobName")
+      val jobMetadata = MetadataUserInput.load(config, jobName, sharedCatalog)
+      if (sharedCatalog.isEmpty) sharedCatalog = Some(jobMetadata.catalog)
       jobName match {
         case "survey" =>
-          Some((SurveyExtraction, SurveyExtraction.extractDataAndStats(config, staticMetadata)))
+          Some((SurveyExtraction, SurveyExtraction.extractDataAndStats(config, jobMetadata), jobMetadata))
         case "observation" =>
-          Some((ObservationExtraction, ObservationExtraction.extractDataAndStats(config, staticMetadata)))
+          Some((ObservationExtraction, ObservationExtraction.extractDataAndStats(config, jobMetadata), jobMetadata))
         case "full" =>
-          Some((FullExtraction, FullExtraction.extractDataAndStats(config, staticMetadata)))
+          Some((FullExtraction, FullExtraction.extractDataAndStats(config, jobMetadata), jobMetadata))
         case unknown =>
           logger.warn(s"Unknown module skipped: $unknown")
           None
@@ -101,12 +108,12 @@ object DataExtractionCLI {
     logger.info("Proceeding to metadata generation and FDP validation...")
     var currentCatalogUri: Option[String] = None
 
-    extractions.foreach { case (jobObject, (dataDf, jobStats, subFolder)) =>
+    extractions.foreach { case (jobObject, (dataDf, jobStats, subFolder), jobMetadata) =>
       logger.info(s"--- Finalizing and Validating Module: $subFolder ---")
 
       val catalogUri = jobObject.exportResultsWithState(
         config,
-        staticMetadata,
+        jobMetadata,
         dataDf,
         jobStats,
         globalStats,

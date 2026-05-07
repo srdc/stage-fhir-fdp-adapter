@@ -123,6 +123,17 @@ case class MetadataUserInput(
                          dataDictionary: Option[List[CsvwField]] = None
                        )
 
+case class JobMetadata(
+                        dataset: DatasetMetadataUserInput,
+                        distribution: DistributionMetadataUserInput,
+                        dataDictionary: Option[List[CsvwField]] = None
+                      )
+
+case class MultiJobMetadataInput(
+                                  catalog: CatalogMetadataUserInput,
+                                  jobs: Map[String, JobMetadata]
+                                )
+
 /**
  * Utility object for loading the application configuration.
  * Supports three modes: JSON file, Excel file, or an interactive Browser-based form.
@@ -140,11 +151,11 @@ object MetadataUserInput {
    * @param appConfig The initial application configuration (usually from CLI args).
    * @return A fully populated ConfigLoader object.
    */
-  def load(appConfig: AppConfig): MetadataUserInput = {
+  def load(appConfig: AppConfig, jobName: String = "", sharedCatalog: Option[CatalogMetadataUserInput] = None): MetadataUserInput = {
     appConfig.runMode.toLowerCase match {
-      case "json" => loadFromJson(appConfig)
-      case "excel" => loadFromExcel(appConfig)
-      case "browser" => loadFromBrowser(appConfig)
+      case "json" => loadFromJson(appConfig, jobName)
+      case "excel" => loadFromExcel(appConfig, jobName, sharedCatalog)
+      case "browser" => loadFromBrowser(appConfig, jobName, sharedCatalog)
       case _      => throw new IllegalArgumentException(s"Unknown runMode: ${appConfig.runMode}")
     }
   }
@@ -155,13 +166,26 @@ object MetadataUserInput {
    * @param appConfig Configuration containing the JSON path.
    * @return ConfigLoader object parsed from JSON.
    */
-  private def loadFromJson(appConfig: AppConfig): MetadataUserInput = {
-    logger.info("Loading static metadata from JSON: {}", appConfig.jsonPath)
+  private def loadFromJson(appConfig: AppConfig, jobName: String): MetadataUserInput = {
+    logger.info("Loading static metadata from JSON for job: {}", jobName)
     val source = Source.fromFile(appConfig.jsonPath)
     val jsonContent = source.mkString
     source.close()
-    Try(JsonFormatter.fromJson[MetadataUserInput](jsonContent))
-      .getOrElse(throw new IllegalArgumentException("Invalid JSON metadata file!"))
+
+    val multiJob = Try(JsonFormatter.fromJson[MultiJobMetadataInput](jsonContent))
+      .getOrElse(throw new IllegalArgumentException("Invalid JSON metadata file! Expected multi-job format with 'catalog' and 'jobs' keys."))
+
+    val jobMeta = multiJob.jobs.getOrElse(jobName,
+      throw new IllegalArgumentException(
+        s"No metadata found for job '$jobName' in config JSON. Available jobs: ${multiJob.jobs.keys.mkString(", ")}"
+      ))
+
+    MetadataUserInput(
+      catalog = multiJob.catalog,
+      dataset = jobMeta.dataset,
+      distribution = jobMeta.distribution,
+      dataDictionary = jobMeta.dataDictionary
+    )
   }
 
   /**
@@ -170,11 +194,12 @@ object MetadataUserInput {
    * @param appConfig Configuration containing the Excel path.
    * @return ConfigLoader object parsed from Excel.
    */
-  private def loadFromExcel(appConfig: AppConfig): MetadataUserInput = {
-    logger.info("Loading static metadata from Excel: {}", appConfig.excelPath)
+  private def loadFromExcel(appConfig: AppConfig, jobName: String = "", sharedCatalog: Option[CatalogMetadataUserInput] = None): MetadataUserInput = {
+    val jobSuffix = if (jobName.nonEmpty) s" (job: $jobName)" else ""
+    logger.info("Loading static metadata from Excel: {}{}", appConfig.excelPath, jobSuffix)
     val file = new File(appConfig.excelPath)
     val wb = WorkbookFactory.create(file)
-    val metadata = fromExcel(wb)
+    val metadata = fromExcel(wb, jobName, sharedCatalog)
     wb.close()
     metadata
   }
@@ -186,7 +211,7 @@ object MetadataUserInput {
    * @param appConfig Default application configuration values to pre-fill the form (e.g., FDP URL, Output Dir).
    * @return The updated ConfigLoader object submitted by the user.
    */
-  private def loadFromBrowser(appConfig: AppConfig): MetadataUserInput = {
+  private def loadFromBrowser(appConfig: AppConfig, jobName: String = "", sharedCatalog: Option[CatalogMetadataUserInput] = None): MetadataUserInput = {
     logger.info("Fetching EU Vocabularies. This might take a few seconds...")
 
     val healthCategories = Map(
@@ -280,6 +305,15 @@ object MetadataUserInput {
       .replace("{{sample-access-url}}", "https://oulu.fi/nfbc1986/sample.csv")
       .replace("{{sample-legislation}}", "http://eur-lex.europa.eu/eli/reg/2025/327/oj")
 
+    // Job header and catalog visibility in multi-job browser run
+    val jobLabel = if (jobName.nonEmpty) jobName else "default"
+    val jobBannerHtml = if (jobName.nonEmpty) {
+      s"""<div class="job-banner">Configuring metadata for job: <span class="job-name">$jobLabel</span>${if (sharedCatalog.isDefined) " (Catalog details carried over from the first job)" else ""}</div>"""
+    } else ""
+    htmlContent = htmlContent
+      .replace("{{job-banner}}", jobBannerHtml)
+      .replace("{{catalog-section-style}}", if (sharedCatalog.isDefined) """style="display:none"""" else "")
+
     // Scrub all unused placeholders
     htmlContent = htmlContent.replaceAll("\\{\\{[^}]+\\}\\}", "")
 
@@ -304,7 +338,12 @@ object MetadataUserInput {
             key -> value
           }.toMap
 
-          resultConfig = Some(fromFormData(formData))
+          val formResult = fromFormData(formData)
+          // Shared catalog from the first job
+          resultConfig = sharedCatalog match {
+            case Some(catalog) => Some(formResult.copy(catalog = catalog))
+            case None => Some(formResult)
+          }
 
           val resp = SUCCESS_HTML.getBytes(StandardCharsets.UTF_8)
           exchange.sendResponseHeaders(200, resp.length)
@@ -317,7 +356,8 @@ object MetadataUserInput {
     server.setExecutor(null)
     server.start()
     val url = s"http://localhost:${server.getAddress.getPort}"
-    logger.info(s"Waiting for browser input. Form launched at: {}", url)
+    val catalogNote = if (sharedCatalog.isDefined) " (catalog shared from first job)" else ""
+    logger.info("Waiting for browser input for job '{}'{} — form launched at: {}", jobLabel, catalogNote, url)
 
     if (Desktop.isDesktopSupported) {
       Desktop.getDesktop.browse(new URI(url))
@@ -420,7 +460,7 @@ object MetadataUserInput {
    * @param wb The active Excel Workbook instance.
    * @return A fully populated ConfigLoader instance based on Excel inputs.
    */
-  def fromExcel(wb: Workbook): MetadataUserInput = {
+  def fromExcel(wb: Workbook, jobName: String = "", sharedCatalog: Option[CatalogMetadataUserInput] = None): MetadataUserInput = {
     def toStringOption(str: String) = str.trim match {
       case s if s.isEmpty => None
       case s => Some(s)
@@ -438,11 +478,25 @@ object MetadataUserInput {
       str.trim
     }
 
+    // Resolve sheet names: try job-specific (e.g. "Dataset-SURVEY") first, fall back to base name (e.g. "Dataset").
+    // Catalog is always shared — it uses the base "Catalog" sheet regardless of job name.
+    def resolveSheet(baseName: String): org.apache.poi.ss.usermodel.Sheet = {
+      if (jobName.nonEmpty) {
+        val jobSpecific = s"$baseName-${jobName.toUpperCase}"
+        val sheet = wb.getSheet(jobSpecific)
+        if (sheet != null) {
+          logger.info("Using job-specific sheet: {}", jobSpecific)
+          return sheet
+        }
+      }
+      wb.getSheet(baseName)
+    }
+
     wb.setMissingCellPolicy(MissingCellPolicy.CREATE_NULL_AS_BLANK)
     val catalogSheet = wb.getSheet("Catalog")
-    val datasetSheet = wb.getSheet("Dataset")
-    val distSheet = wb.getSheet("Distribution")
-    val dataDictionarySheet = wb.getSheet("Data Dictionary")
+    val datasetSheet = resolveSheet("Dataset")
+    val distSheet = resolveSheet("Distribution")
+    val dataDictionarySheet = resolveSheet("Data Dictionary")
 
     val formatter = new DataFormatter()
     val evaluator = wb.getCreationHelper.createFormulaEvaluator()
@@ -457,24 +511,24 @@ object MetadataUserInput {
     def getFormattedOption(sheet: org.apache.poi.ss.usermodel.Sheet, rowIdx: Int) = toStringOption(getCellStr(sheet, rowIdx))
 
     // Validations
-    val existingVal = toBooleanOption(getCellStr(catalogSheet, 1), "Catalog.existing")
-    val uriVal = getFormattedOption(catalogSheet, 2)
-    if (existingVal.contains(true) && uriVal.isEmpty) throw new IllegalArgumentException("Catalog.uri is REQUIRED when existing is true.")
+    if (datasetSheet == null) {
+      val sheetName = if (jobName.nonEmpty) s"Dataset-${jobName.toUpperCase} or Dataset" else "Dataset"
+      throw new IllegalArgumentException(s"Required sheet '$sheetName' not found in Excel workbook.")
+    }
+    if (distSheet == null) {
+      val sheetName = if (jobName.nonEmpty) s"Distribution-${jobName.toUpperCase} or Distribution" else "Distribution"
+      throw new IllegalArgumentException(s"Required sheet '$sheetName' not found in Excel workbook.")
+    }
 
-    val dsPage = getFormattedOption(datasetSheet, 8)
-    val dsEmail = getFormattedOption(datasetSheet, 9)
-    if (dsPage.isEmpty && dsEmail.isEmpty) throw new IllegalArgumentException("Dataset Contact Point requires at least one of page or email.")
+    // Reuse sharedCatalog for subsequent ones
+    val catalog: CatalogMetadataUserInput = sharedCatalog.getOrElse {
+      if (catalogSheet == null) throw new IllegalArgumentException("Required sheet 'Catalog' not found in Excel workbook.")
 
-    val hdabPage = getFormattedOption(datasetSheet, 12)
-    val hdabEmail = getFormattedOption(datasetSheet, 13)
-    if (hdabPage.isEmpty && hdabEmail.isEmpty) throw new IllegalArgumentException("Dataset HDAB requires at least one of contact point page or email.")
+      val existingVal = toBooleanOption(getCellStr(catalogSheet, 1), "Catalog.existing")
+      val uriVal = getFormattedOption(catalogSheet, 2)
+      if (existingVal.contains(true) && uriVal.isEmpty) throw new IllegalArgumentException("Catalog.uri is REQUIRED when existing is true.")
 
-    val pubPage = getFormattedOption(datasetSheet, 15)
-    val pubEmail = getFormattedOption(datasetSheet, 16)
-    if (pubPage.isEmpty && pubEmail.isEmpty) throw new IllegalArgumentException("Dataset Publisher requires at least one of contact page or email.")
-
-    MetadataUserInput(
-      catalog = CatalogMetadataUserInput(
+      CatalogMetadataUserInput(
         existing = existingVal,
         uri = uriVal,
         title = getFormattedOption(catalogSheet, 3),
@@ -519,7 +573,23 @@ object MetadataUserInput {
         },
         releaseDate = getFormattedOption(catalogSheet, 22),
         rights = getFormattedOption(catalogSheet, 23)
-      ),
+      )
+    }
+    // Validation dataset sheet
+    val dsPage = getFormattedOption(datasetSheet, 8)
+    val dsEmail = getFormattedOption(datasetSheet, 9)
+    if (dsPage.isEmpty && dsEmail.isEmpty) throw new IllegalArgumentException("Dataset Contact Point requires at least one of page or email.")
+
+    val hdabPage = getFormattedOption(datasetSheet, 12)
+    val hdabEmail = getFormattedOption(datasetSheet, 13)
+    if (hdabPage.isEmpty && hdabEmail.isEmpty) throw new IllegalArgumentException("Dataset HDAB requires at least one of contact point page or email.")
+
+    val pubPage = getFormattedOption(datasetSheet, 15)
+    val pubEmail = getFormattedOption(datasetSheet, 16)
+    if (pubPage.isEmpty && pubEmail.isEmpty) throw new IllegalArgumentException("Dataset Publisher requires at least one of contact page or email.")
+
+    MetadataUserInput(
+      catalog = catalog,
       dataset = DatasetMetadataUserInput(
         title = getFormattedOption(datasetSheet, 1),
         description = getFormattedOption(datasetSheet, 2),

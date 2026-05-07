@@ -17,12 +17,16 @@
         form .field label .desc { font-size: .9em; color: #555555; font-weight: lighter; display: block; }
         form .field.hidden { display: none; }
         h2 { border-bottom: 2px solid #333; padding-bottom: 0.5rem; margin-top: 2rem; }
+        .job-banner { background: #2c5282; color: white; padding: 0.75em 1.2em; border-radius: 0.5em; margin: 1em 0; font-size: 1.1rem; font-weight: bold; }
+        .job-banner .job-name { text-transform: uppercase; }
     </style>
 </head>
 <body>
 <p class="info">Fill the form below and submit to proceed with RDF metadata extraction.</p>
+{{job-banner}}
 <form method="post" action="/form">
 
+    <div id="catalog-section" {{catalog-section-style}}>
     <h2>Catalog</h2>
     <div class="field">
         <label>Existing?</label>
@@ -51,6 +55,8 @@
             {{countryOptions}}
         </select>
     </div>
+
+    </div><!-- end catalog-section -->
 
     <h2>Dataset</h2>
     <div class="field">
@@ -283,6 +289,16 @@
             item.querySelectorAll('input,textarea').forEach(input => input.removeAttribute('required'))
         });
     }
+    // When catalog section is hidden (subsequent jobs), disable all required fields inside it
+    document.addEventListener('DOMContentLoaded', function() {
+        var catalogSection = document.getElementById('catalog-section');
+        if (catalogSection && catalogSection.style.display === 'none') {
+            catalogSection.querySelectorAll('input,textarea,select').forEach(function(el) {
+                el.removeAttribute('required');
+                el.disabled = true;
+            });
+        }
+    });
 </script>
 </body>
 </html>
