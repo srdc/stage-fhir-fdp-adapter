@@ -4,7 +4,7 @@ import io.onfhir.spark.{FhirApiSource, FhirPagination, FhirPaginationMethods, Sp
 import org.apache.spark.sql.SparkSession
 import srdc.stage.config.{AppConfig, CommandLineArgumentParser}
 import org.slf4j.{Logger, LoggerFactory}
-import srdc.stage.jobs.{DictionaryGeneration, FullExtraction, ObservationExtraction, SurveyExtraction}
+import srdc.stage.jobs.{BaseExtraction, FullExtraction, ObservationExtraction, SurveyExtraction}
 import srdc.stage.rdf.{CatalogMetadataUserInput, DatasetStats, MetadataUserInput}
 
 /**
@@ -41,9 +41,9 @@ object DataExtractionCLI {
     val jobs = config.jobType.split(",").map(_.trim.toLowerCase)
     logger.info(s"Initiating extraction pipelines for ${jobs.length} module(s): ${jobs.mkString(", ").toUpperCase}")
 
-    // Handle Dictionary generation from excel without unnecessary initialization of Spark
-    if (jobs.length == 1 && jobs.head == "dictionary") {
-      DictionaryGeneration.run(config)
+    // No spark initialization when no FHIR server is provided
+    if (config.fhirServer == null || config.fhirServer.trim.isEmpty) {
+      runJobsWithoutFhir(config, jobs)
       System.exit(0)
     }
 
@@ -126,5 +126,37 @@ object DataExtractionCLI {
 
     spark.stop()
     System.exit(0)
+  }
+
+  /**
+   * Build RDF contents only form the resource excel when no FHIR server is present.
+   *
+   * @param config Application configuration
+   * @param jobs The parsed list of job names
+   */
+  private def runJobsWithoutFhir(config: AppConfig, jobs: Array[String]): Unit = {
+    logger.info("No FHIR server configured - running metadata-only pipeline (CSVW will be built from the Excel Data Dictionary).")
+
+    var sharedCatalog: Option[CatalogMetadataUserInput] = None
+    var currentCatalogUri: Option[String] = None
+
+    jobs.foreach { jobName =>
+      logger.info(s"--- Finalizing and Validating Module (no-FHIR): $jobName ---")
+      val jobMetadata = MetadataUserInput.load(config, jobName, sharedCatalog)
+      if (sharedCatalog.isEmpty) sharedCatalog = Some(jobMetadata.catalog)
+
+      val jobObject: BaseExtraction = jobName match {
+        case "survey"      => SurveyExtraction
+        case "observation" => ObservationExtraction
+        case "full"        => FullExtraction
+        case unknown =>
+          logger.warn(s"Unknown module skipped: $unknown")
+          null
+      }
+      if (jobObject != null) {
+        val catalogUri = jobObject.exportResultsNoFhir(config, jobMetadata, jobName, currentCatalogUri)
+        currentCatalogUri = Some(catalogUri)
+      }
+    }
   }
 }

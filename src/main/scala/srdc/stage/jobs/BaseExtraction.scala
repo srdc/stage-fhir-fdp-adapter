@@ -132,7 +132,32 @@ abstract class BaseExtraction {
       jobStats = jobStats,
       globalStats = globalStats,
       runMode = cfg.runMode,
-      sharedCatalogUri = catalogUri
+      sharedCatalogUri = catalogUri,
+      isFhirConfigured = true
+    )
+  }
+
+  /**
+   * Export used when no FHIR server is configured.
+   */
+  def exportResultsNoFhir(
+                           cfg: AppConfig,
+                           meta: MetadataUserInput,
+                           subFolder: String,
+                           catalogUri: Option[String]
+                         ): String = {
+    val emptyStats = DatasetStats(0, 0, 0, 0, Array.empty)
+    MetadataWriter.exportResults(
+      outputDir = s"${cfg.outputDir}/$subFolder/rdf",
+      fdpUrl = cfg.fdpUrl.getOrElse(""),
+      fdpEmail = cfg.fdpEmail.getOrElse(""),
+      fdpPassword = cfg.fdpPassword.getOrElse(""),
+      meta = meta,
+      jobStats = emptyStats,
+      globalStats = emptyStats,
+      runMode = cfg.runMode,
+      sharedCatalogUri = catalogUri,
+      isFhirConfigured = false
     )
   }
 }

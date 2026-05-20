@@ -16,6 +16,7 @@ import io.onfhir.feast.parsers.JsonFormatter
 import org.slf4j.LoggerFactory
 import srdc.stage.vocab.PubEU
 
+import scala.collection.mutable
 import scala.util.Try
 
 case class Agent(name: String, email: Option[String] = None, `type`: Option[String] = None)
@@ -114,19 +115,42 @@ case class DatasetMetadataUserInput(
                                      qualityAnnotation: String = ""
                                    )
 
-case class CsvwField(name: String, title: String, datatype: String, description: Option[String] = None, propertyUrl: Option[String] = None, unit: Option[String] = None)
+case class CsvwField(
+                      name: String,
+                      title: String,
+                      datatype: String,
+                      description: Option[String] = None,
+                      propertyUrl: Option[String] = None,
+                      unit: Option[String] = None,
+                      study: Option[String] = None,
+                      group: Option[String] = None,
+                      subpopulation: Option[String] = None,
+                      sampleSize: Option[String] = None,
+                      dataOwner: Option[String] = None,
+                      identifier: Option[String] = None,
+                      selection: Option[String] = None,
+                      parentGroup: Option[String] = None,
+                      responsible: Option[String] = None,
+                      note: Option[String] = None,
+                      minValue: Option[String] = None,
+                      maxValue: Option[String] = None,
+                      required: Option[String] = None,
+                      conditionalOn: Option[String] = None
+                    )
 
 case class MetadataUserInput(
                          catalog: CatalogMetadataUserInput,
                          dataset: DatasetMetadataUserInput,
                          distribution: DistributionMetadataUserInput,
-                         dataDictionary: Option[List[CsvwField]] = None
+                         dataDictionary: Option[List[CsvwField]] = None,
+                         dataDictionaryValueSets: Map[String, Map[String, String]] = Map.empty
                        )
 
 case class JobMetadata(
                         dataset: DatasetMetadataUserInput,
                         distribution: DistributionMetadataUserInput,
-                        dataDictionary: Option[List[CsvwField]] = None
+                        dataDictionary: Option[List[CsvwField]] = None,
+                        dataDictionaryValueSets: Map[String, Map[String, String]] = Map.empty
                       )
 
 case class MultiJobMetadataInput(
@@ -184,7 +208,8 @@ object MetadataUserInput {
       catalog = multiJob.catalog,
       dataset = jobMeta.dataset,
       distribution = jobMeta.distribution,
-      dataDictionary = jobMeta.dataDictionary
+      dataDictionary = jobMeta.dataDictionary,
+      dataDictionaryValueSets = jobMeta.dataDictionaryValueSets
     )
   }
 
@@ -716,17 +741,56 @@ object MetadataUserInput {
         accessService = getFormattedOption(distSheet, 18)
       ),
       dataDictionary = if (dataDictionarySheet != null && dataDictionarySheet.getLastRowNum > 1)
-        Some((1 until dataDictionarySheet.getLastRowNum).map(row => {
-          CsvwField(
-            name = ensureNotEmpty(dataDictionarySheet.getRow(row).getCell(0).getStringCellValue, s"Data Dictionary:$row:name"),
-            title = ensureNotEmpty(dataDictionarySheet.getRow(row).getCell(1).getStringCellValue, s"Data Dictionary:$row:title"),
-            description = toStringOption(dataDictionarySheet.getRow(row).getCell(2).getStringCellValue),
-            datatype = ensureNotEmpty(dataDictionarySheet.getRow(row).getCell(3).getStringCellValue, s"Data Dictionary:$row:datatype"),
-            propertyUrl = toStringOption(dataDictionarySheet.getRow(row).getCell(4).getStringCellValue),
-            unit = toStringOption(dataDictionarySheet.getRow(row).getCell(5).getStringCellValue)
-          )
+        Some((1 until dataDictionarySheet.getLastRowNum).flatMap(row => {
+          val r = dataDictionarySheet.getRow(row)
+          if (r == null) None
+          else {
+            val nameVal = r.getCell(0).getStringCellValue.trim
+            if (nameVal.isEmpty) None
+            else Some(CsvwField(
+              name = ensureNotEmpty(r.getCell(0).getStringCellValue, s"Data Dictionary:$row:name"),
+              title = ensureNotEmpty(r.getCell(1).getStringCellValue, s"Data Dictionary:$row:title"),
+              description = toStringOption(r.getCell(2).getStringCellValue),
+              datatype = ensureNotEmpty(r.getCell(3).getStringCellValue, s"Data Dictionary:$row:datatype"),
+              propertyUrl = toStringOption(r.getCell(4).getStringCellValue),
+              unit = toStringOption(r.getCell(5).getStringCellValue),
+              study = toStringOption(r.getCell(6).getStringCellValue),
+              group = toStringOption(r.getCell(7).getStringCellValue),
+              subpopulation = toStringOption(r.getCell(8).getStringCellValue),
+              sampleSize = toStringOption(r.getCell(9).getStringCellValue),
+              dataOwner = toStringOption(r.getCell(10).getStringCellValue),
+              identifier = toStringOption(r.getCell(11).getStringCellValue),
+              selection = toStringOption(r.getCell(12).getStringCellValue),
+              parentGroup = toStringOption(r.getCell(13).getStringCellValue),
+              responsible = toStringOption(r.getCell(14).getStringCellValue),
+              note = toStringOption(r.getCell(15).getStringCellValue),
+              minValue = toStringOption(r.getCell(16).getStringCellValue),
+              maxValue = toStringOption(r.getCell(17).getStringCellValue),
+              required = toStringOption(r.getCell(18).getStringCellValue),
+              conditionalOn = toStringOption(r.getCell(19).getStringCellValue)
+            ))
+          }
         }).toList)
-      else None
+      else None,
+      dataDictionaryValueSets = {
+        val valueSetsSheet = resolveSheet("Value Sets")
+        if (valueSetsSheet == null) Map.empty[String, Map[String, String]]
+        else {
+          val builder = mutable.LinkedHashMap.empty[String, mutable.LinkedHashMap[String, String]]
+          for (rowIdx <- 1 to valueSetsSheet.getLastRowNum) {
+            val r = valueSetsSheet.getRow(rowIdx)
+            if (r != null) {
+              val variable = r.getCell(0).getStringCellValue.trim
+              val code = r.getCell(1).getStringCellValue.trim
+              val display = r.getCell(2).getStringCellValue.trim
+              if (variable.nonEmpty && code.nonEmpty) {
+                builder.getOrElseUpdate(variable, mutable.LinkedHashMap.empty)(code) = display
+              }
+            }
+          }
+          builder.map { case (k, v) => k -> v.toMap }.toMap
+        }
+      }
     )
   }
 }

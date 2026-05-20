@@ -10,17 +10,21 @@ const zlib = require('zlib');
 
 function parseArgs() {
   const args = process.argv.slice(2);
-  const opts = { input: null, output: 'kora_data_dictionary.xlsx' };
+  const opts = { input: null, output: 'kora_data_dictionary.xlsx', lang: 'en' };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--input' && args[i + 1]) opts.input = args[++i];
     else if (args[i] === '--output' && args[i + 1]) opts.output = args[++i];
+    else if ((args[i] === '--lang' || args[i] === '--language') && args[i + 1]) {
+      const v = String(args[++i]).toLowerCase();
+      opts.lang = (v === 'de' || v === 'ger' || v === 'deu' || v === 'german') ? 'de' : 'en';
+    }
     else if (args[i] === '--help' || args[i] === '-h') {
-      console.log('Usage: node generate-dict-kora.js --input <xlsx> [--output <xlsx>]');
+      console.log('Usage: node generate-dict-kora.js --input <xlsx> [--output <xlsx>] [--lang en|de]');
       process.exit(0);
     }
   }
   if (!opts.input) {
-    console.error('Error: --input is required.\nUsage: node generate-dict-kora.js --input <xlsx> [--output <xlsx>]');
+    console.error('Error: --input is required.\nUsage: node generate-dict-kora.js --input <xlsx> [--output <xlsx>] [--lang en|de]');
     process.exit(1);
   }
   return opts;
@@ -345,7 +349,8 @@ function main() {
   console.log('KORA-AGE1 → Data Dictionary + Value Sets Generator');
   console.log('='.repeat(60));
 
-  console.log(`\nReading: ${opts.input}`);
+  console.log(`\nLanguage: ${opts.lang === 'de' ? 'German (Group GER / Content GER / Code-Notice GER)' : 'English (Group ENG / Content ENG / Code-Notice ENG)'}`);
+  console.log(`Reading: ${opts.input}`);
   const buf = fs.readFileSync(path.resolve(opts.input));
   const entries = readZipEntries(buf);
 
@@ -362,7 +367,18 @@ function main() {
   // TODO: Change if needed
   const PROPERTY_URL_BASE = 'http://example.org/vocab';
 
-  const dictRows = [['Variable', 'Name', 'Description', 'Datatype', 'Property URL (ontology)', 'Unit']];
+  // Language-aware cell indices. KORA_W_Phenotypes pairs GER/ENG cells; pick the right side per --lang.
+  const isGerman = opts.lang === 'de';
+  const idxGroup      = isGerman ? 5 : 6;   // r[5] Group GER  vs r[6] Group ENG
+  const idxContent    = isGerman ? 7 : 8;   // r[7] Content GER vs r[8] Content ENG
+  const idxCodeNotice = isGerman ? 9 : 10;  // r[9] Code/Notice GER vs r[10] Code/Notice ENG
+
+  const dictRows = [[
+    'Variable', 'Name', 'Description', 'Datatype', 'Property URL (ontology)', 'Unit',
+    'Study', 'Group', 'Subpopulation', 'Sample Size', 'Data Owner', 'Identifier',
+    'Selection', 'Parent Group', 'Responsible',
+    'Note', 'Min Value', 'Max Value', 'Required', 'Conditional On'
+  ]];
   const valueSetRows = [['Variable', 'Code', 'Display']];
 
   let included = 0;
@@ -380,13 +396,22 @@ function main() {
 
     if (hidden === 'yes') { skipped++; continue; }
 
-    const contentEng = r[8] ? String(r[8]).trim() : '';
-    const codeNoticeEng = r[10] ? String(r[10]).trim() : '';
+    const selection = r[2] ? String(r[2]).trim() : '';
+    const parentTable = r[3] ? String(r[3]).trim() : '';
+    const study = r[4] ? String(r[4]).trim() : '';
+
+    const group  = r[idxGroup] ? String(r[idxGroup]).trim() : '';
+    const content = r[idxContent] ? String(r[idxContent]).trim() : '';
+    const codeNotice = r[idxCodeNotice] ? String(r[idxCodeNotice]).trim() : '';
+    const dataOwner = r[11] ? String(r[11]).trim() : '';
+    const responsible = r[12] ? String(r[12]).trim() : '';
+    const subpopulation = r[13] ? String(r[13]).trim() : '';
+    const sampleN = r[14] ? String(r[14]).trim() : '';
     const rawType = r[15] ? String(r[15]).trim() : '';
 
     const datatype = mapKoraType(rawType);
 
-    const codes = parseCodes(codeNoticeEng);
+    const codes = parseCodes(codeNotice);
     let propertyUrl = '';
 
     if (codes.length > 0) {
@@ -400,10 +425,24 @@ function main() {
 
     dictRows.push([
       variable,
-      contentEng || variable,
-      contentEng || variable,
+      content || variable,
+      content || variable,
       datatype,
       propertyUrl,
+      '',
+      study,
+      group,
+      subpopulation,
+      sampleN,
+      dataOwner,
+      '',
+      selection,
+      parentTable,
+      responsible,
+      '',
+      '',
+      '',
+      '',
       ''
     ]);
     included++;

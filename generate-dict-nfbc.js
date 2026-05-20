@@ -282,8 +282,14 @@ function main() {
   const SKIP_FORMS = new Set(['etusivu', 'suostumus']);
   const SKIP_TYPES = new Set(['descriptive']);
   const PROPERTY_URL_BASE = 'http://example.org/vocab';
+  const STUDY_NAME = 'NFBC1966';
 
-  const dictRows = [['Variable', 'Name', 'Description', 'Datatype', 'Property URL (ontology)', 'Unit']];
+  const dictRows = [[
+    'Variable', 'Name', 'Description', 'Datatype', 'Property URL (ontology)', 'Unit',
+    'Study', 'Group', 'Subpopulation', 'Sample Size', 'Data Owner', 'Identifier',
+    'Selection', 'Parent Group', 'Responsible',
+    'Note', 'Min Value', 'Max Value', 'Required', 'Conditional On'
+  ]];
   const valueSetRows = [['Variable', 'Code', 'Display']];
 
   let skipped = 0;
@@ -292,11 +298,18 @@ function main() {
 
   for (const row of records) {
     const formName = row['Form Name'] || '';
+    const sectionHeader = stripHtml(row['Section Header'] || '');
     const fieldType = row['Field Type'] || '';
     const fieldName = row['Variable / Field Name'] || '';
     const fieldLabel = row['Field Label'] || '';
     const choicesRaw = row['Choices, Calculations, OR Slider Labels'] || '';
     const validation = row['Text Validation Type OR Show Slider Number'] || '';
+    const identifierFlag = (row['Identifier?'] || '').trim();
+    const fieldNote = stripHtml(row['Field Note'] || '');
+    const validMin = (row['Text Validation Min'] || '').trim();
+    const validMax = (row['Text Validation Max'] || '').trim();
+    const requiredFlag = (row['Required Field?'] || '').trim();
+    const branchingLogic = (row['Branching Logic (Show field only if...)'] || '').trim();
 
     // Skip front page, consent, display-only, empty
     if (SKIP_FORMS.has(formName)) { skipped++; continue; }
@@ -307,6 +320,8 @@ function main() {
     const cleanLabel = stripHtml(fieldLabel).substring(0, 300);
     const datatype = mapRedcapType(fieldType, validation);
     const name = cleanLabel || fieldName;
+    const group = sectionHeader || formName;
+    const parentGroup = sectionHeader ? formName : '';
 
     const codes = parseChoices(choicesRaw);
     let propertyUrl = '';
@@ -319,7 +334,23 @@ function main() {
         valueSetRows.push([fieldName, c.code, c.display]);
       }
     }
-    dictRows.push([fieldName, name, name, datatype, propertyUrl, '']);
+    dictRows.push([
+      fieldName, name, name, datatype, propertyUrl, '',
+      STUDY_NAME,
+      group,
+      '',
+      '',
+      '',
+      identifierFlag,
+      '',
+      parentGroup,
+      '',
+      fieldNote,
+      validMin,
+      validMax,
+      requiredFlag,
+      branchingLogic
+    ]);
     included++;
   }
 

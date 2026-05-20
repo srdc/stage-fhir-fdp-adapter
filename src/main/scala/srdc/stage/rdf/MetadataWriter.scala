@@ -156,7 +156,7 @@ object MetadataWriter {
    * @param sharedCatalogUri An optional URI to reuse an existing Catalog across multiple jobs.
    * @return The URI of the Catalog used or created.
    */
-  def exportResults(outputDir: String, fdpUrl: String, fdpEmail: String, fdpPassword: String, meta: MetadataUserInput, jobStats: DatasetStats, globalStats: DatasetStats, runMode: String, sharedCatalogUri: Option[String] = None): String = {
+  def exportResults(outputDir: String, fdpUrl: String, fdpEmail: String, fdpPassword: String, meta: MetadataUserInput, jobStats: DatasetStats, globalStats: DatasetStats, runMode: String, sharedCatalogUri: Option[String] = None, isFhirConfigured: Boolean = true): String = {
     logger.info("Starting Metadata Export...")
 
     val isFdpMode = fdpUrl.trim.nonEmpty && fdpEmail.trim.nonEmpty
@@ -221,11 +221,23 @@ object MetadataWriter {
 
     // 4. CSVW
     val initialCsvwUri = if (isFdpMode) "" else s"urn:uuid:${UUID.randomUUID()}"
-    val csvwModel = createCsvwModel(jobStats, initialCsvwUri, finalDistUri)
-
-    if (jobStats.vocabularies.nonEmpty) {
-      val vocabModel = createConceptSchemes(jobStats)
-      csvwModel.add(vocabModel)
+    val csvwModel = if (isFhirConfigured) {
+      val model = createCsvwModel(jobStats, initialCsvwUri, finalDistUri)
+      if (jobStats.vocabularies.nonEmpty) {
+        model.add(createConceptSchemes(jobStats))
+      }
+      model
+    } else {
+      val fields = meta.dataDictionary.getOrElse(List.empty)
+      if (fields.isEmpty) {
+        logger.warn("No FHIR server configured and no Data Dictionary sheet present — CSVW will be empty.")
+      }
+      createDictionaryModel(
+        fields = fields,
+        vocabularies = meta.dataDictionaryValueSets,
+        subjectUri = initialCsvwUri,
+        parentDistributionUri = finalDistUri
+      )
     }
 
     saveLocalFile(outputDir, "CSVW", csvwModel)
@@ -659,20 +671,53 @@ object MetadataWriter {
    * @param vocabularies Map of variable name to its code -> display pairs from Value Sets sheet.
    * @return A populated Jena Model representing the dictionary as a CSVW schema with SKOS vocabularies.
    */
-  def createDictionaryModel(fields: List[CsvwField], vocabularies: Map[String, Map[String, String]] = Map.empty): Model = {
+  def createDictionaryModel(fields: List[CsvwField], vocabularies: Map[String, Map[String, String]] = Map.empty, subjectUri: String = "", parentDistributionUri: String = ""): Model = {
     val m = createModel()
     val qudtUnit = m.createProperty("http://qudt.org/schema/qudt/unit")
 
-    val tableGroup = m.createResource(s"urn:uuid:${UUID.randomUUID()}")
+    val COHORT_NS = "http://example.org/cohort#"
+    m.setNsPrefix("cohort", COHORT_NS)
+    val cohortSampleSize = m.createProperty(COHORT_NS + "sampleSize")
+    val cohortIsIdentifier = m.createProperty(COHORT_NS + "isIdentifier")
+    val cohortSelectionStatus = m.createProperty(COHORT_NS + "selectionStatus")
+    val cohortConditionalOn = m.createProperty(COHORT_NS + "conditionalOn")
+    val cohortFromStudy = m.createProperty(COHORT_NS + "fromStudy")
+
+    val responsibleRole = m.createResource("http://example.org/cohort/role/responsible")
+
+    // URI-safe slug for SKOS concept fragments (Study, Group)
+    def slug(s: String): String = s.trim.replaceAll("\\s+", "_").replaceAll("[<>\"{}|\\\\^`#]", "")
+
+    val tableGroup = createSubject(m, subjectUri)
       .addProperty(RDF.`type`, CSVW.TableGroup)
       .addProperty(DCTerms.title, m.createLiteral("Data Dictionary Schema", "en"))
       .addProperty(DCTerms.description, m.createLiteral("CSVW schema describing the variables defined in the data dictionary.", "en"))
+
+    if (parentDistributionUri.nonEmpty) {
+      tableGroup.addProperty(DCTerms.isPartOf, m.createResource(parentDistributionUri))
+    }
 
     val table = m.createResource(s"urn:uuid:${UUID.randomUUID()}")
       .addProperty(RDF.`type`, CSVW.Table)
       .addProperty(DCTerms.title, m.createLiteral("Variable Definitions", "en"))
 
     tableGroup.addProperty(CSVW.table, table)
+
+    val studyScheme = m.createResource(s"$VOCAB_BASE/study")
+      .addProperty(RDF.`type`, SKOS.ConceptScheme)
+      .addProperty(DCTerms.title, m.createLiteral("Studies / Cohorts", "en"))
+
+    val sectionScheme = m.createResource(s"$VOCAB_BASE/section")
+      .addProperty(RDF.`type`, SKOS.ConceptScheme)
+      .addProperty(DCTerms.title, m.createLiteral("Variable groups / sections", "en"))
+
+    val parentGroupScheme = m.createResource(s"$VOCAB_BASE/parent-group")
+      .addProperty(RDF.`type`, SKOS.ConceptScheme)
+      .addProperty(DCTerms.title, m.createLiteral("Parent groups (coarser groupings above Section)", "en"))
+
+    val selectionScheme = m.createResource(s"$VOCAB_BASE/selection")
+      .addProperty(RDF.`type`, SKOS.ConceptScheme)
+      .addProperty(DCTerms.title, m.createLiteral("Variable selection / inclusion status", "en"))
 
     fields.foreach { f =>
       val col = m.createResource(s"urn:uuid:${UUID.randomUUID()}")
@@ -684,6 +729,112 @@ object MetadataWriter {
       f.description.foreach(d => col.addProperty(DCTerms.description, m.createLiteral(d, "en")))
       f.propertyUrl.filter(_.nonEmpty).foreach(p => col.addProperty(CSVW.propertyURL, m.createResource(p)))
       f.unit.filter(_.nonEmpty).foreach(u => col.addProperty(qudtUnit, u))
+
+      f.study.filter(_.nonEmpty).foreach { s =>
+        val concept = m.createResource(s"$VOCAB_BASE/study/${slug(s)}")
+          .addProperty(RDF.`type`, SKOS.Concept)
+          .addProperty(SKOS.inScheme, studyScheme)
+          .addProperty(SKOS.prefLabel, m.createLiteral(s, "en"))
+        studyScheme.addProperty(SKOS.hasTopConcept, concept)
+        col.addProperty(cohortFromStudy, concept)
+      }
+
+      f.group.filter(_.nonEmpty).foreach { g =>
+        val concept = m.createResource(s"$VOCAB_BASE/section/${slug(g)}")
+          .addProperty(RDF.`type`, SKOS.Concept)
+          .addProperty(SKOS.inScheme, sectionScheme)
+          .addProperty(SKOS.prefLabel, m.createLiteral(g, "en"))
+        sectionScheme.addProperty(SKOS.hasTopConcept, concept)
+        col.addProperty(SKOS.broader, concept)
+      }
+
+      f.subpopulation.filter(_.nonEmpty).foreach(sp =>
+        col.addLiteral(HealthDCATAP.populationCoverage, sp)
+      )
+
+      f.sampleSize.filter(_.nonEmpty).foreach { n =>
+        n.trim.toLongOption match {
+          case Some(v) => col.addLiteral(cohortSampleSize, m.createTypedLiteral(v, XSDDatatype.XSDnonNegativeInteger))
+          case None    => col.addProperty(cohortSampleSize, m.createLiteral(n, "en"))
+        }
+      }
+
+      f.dataOwner.filter(_.nonEmpty).foreach { owner =>
+        val agent = m.createResource()
+          .addProperty(RDF.`type`, FOAF.Agent)
+          .addProperty(FOAF.name, owner)
+        col.addProperty(DCTerms.rightsHolder, agent)
+      }
+
+      f.identifier.filter(_.nonEmpty).foreach { flag =>
+        val truthy = Set("yes", "y", "true", "1")
+        val v = truthy.contains(flag.trim.toLowerCase)
+        col.addLiteral(cohortIsIdentifier, m.createTypedLiteral(v, XSDDatatype.XSDboolean))
+      }
+
+      // Selection -> SKOS Concept
+      f.selection.filter(_.nonEmpty).foreach { s =>
+        val concept = m.createResource(s"$VOCAB_BASE/selection/${slug(s)}")
+          .addProperty(RDF.`type`, SKOS.Concept)
+          .addProperty(SKOS.inScheme, selectionScheme)
+          .addProperty(SKOS.prefLabel, m.createLiteral(s, "en"))
+        selectionScheme.addProperty(SKOS.hasTopConcept, concept)
+        col.addProperty(cohortSelectionStatus, concept)
+      }
+
+      // Parent Group -> skos:broader
+      f.parentGroup.filter(_.nonEmpty).foreach { pg =>
+        val concept = m.createResource(s"$VOCAB_BASE/parent-group/${slug(pg)}")
+          .addProperty(RDF.`type`, SKOS.Concept)
+          .addProperty(SKOS.inScheme, parentGroupScheme)
+          .addProperty(SKOS.prefLabel, m.createLiteral(pg, "en"))
+        parentGroupScheme.addProperty(SKOS.hasTopConcept, concept)
+        col.addProperty(SKOS.broader, concept)
+      }
+
+      // Responsible -> prov:qualifiedAttribution
+      f.responsible.filter(_.nonEmpty).foreach { person =>
+        val attribution = m.createResource()
+          .addProperty(RDF.`type`, PROV.Attribution)
+          .addProperty(DCAT.hadRole, responsibleRole)
+          .addProperty(PROV.agent,
+            m.createResource()
+              .addProperty(RDF.`type`, FOAF.Agent)
+              .addProperty(FOAF.name, person)
+          )
+        col.addProperty(PROV.qualifiedAttribution, attribution)
+      }
+
+      // Note -> skos:scopeNote
+      f.note.filter(_.nonEmpty).foreach(n =>
+        col.addProperty(SKOS.scopeNote, m.createLiteral(n, "en"))
+      )
+
+      // Min / Max -> csvw:minimum, csvw:maximum
+      def emitBoundary(prop: org.apache.jena.rdf.model.Property, raw: String): Unit = {
+        val t = raw.trim
+        t.toLongOption match {
+          case Some(v) => col.addLiteral(prop, m.createTypedLiteral(v, XSDDatatype.XSDinteger))
+          case None => t.toDoubleOption match {
+            case Some(v) => col.addLiteral(prop, m.createTypedLiteral(v, XSDDatatype.XSDdouble))
+            case None    => col.addProperty(prop, m.createLiteral(t, "en"))
+          }
+        }
+      }
+      f.minValue.filter(_.nonEmpty).foreach(emitBoundary(CSVW.minimum, _))
+      f.maxValue.filter(_.nonEmpty).foreach(emitBoundary(CSVW.maximum, _))
+
+      // Required -> csvw:required xsd:boolean
+      f.required.filter(_.nonEmpty).foreach { flag =>
+        val truthy = Set("yes", "y", "true", "1")
+        val v = truthy.contains(flag.trim.toLowerCase)
+        col.addLiteral(CSVW.required, m.createTypedLiteral(v, XSDDatatype.XSDboolean))
+      }
+
+      // Conditional On -> cohort:conditionalOn literal
+      f.conditionalOn.filter(_.nonEmpty).foreach(expr =>
+        col.addProperty(cohortConditionalOn, m.createLiteral(expr, "en"))
+      )
 
       table.addProperty(CSVW.column, col)
     }
