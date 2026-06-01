@@ -15,7 +15,8 @@ object FileUtils {
    * @param format The format of the output file (e.g., "csv", "parquet").
    */
   def saveData(df: DataFrame, path: String, format: String): Unit = {
-    val writer = df.write.mode(SaveMode.Overwrite)
+    val out = if (format == "csv") df.coalesce(1) else df
+    val writer = out.write.mode(SaveMode.Overwrite)
     if (format == "csv") writer.option("header", "true")
     writer.format(format).save(path)
     logger.info("Data saved to: {}", path)

@@ -20,7 +20,9 @@ case class AppConfig(
                       clientId: Option[String],
                       clientSecret: Option[String],
                       scope: Option[List[String]],
-                      token: Option[String]
+                      token: Option[String],
+                      dateFrom: Option[String] = None,
+                      dateTo: Option[String] = None
                     )
 
 object AppConfig {

@@ -18,6 +18,21 @@ abstract class BaseExtraction {
   protected def loadPatients()(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): DataFrame =
     sparkOnFhir.load("Patient?_searchafter").cache()
 
+  /**
+   * Date Time filter for fhir extraction
+   */
+  protected def buildDateFilter(appConfig: AppConfig, paramName: String): String = {
+    val fromPart = appConfig.dateFrom.map(v => s"&$paramName=ge$v").getOrElse("")
+    val toPart = appConfig.dateTo.map(v => s"&$paramName=le$v").getOrElse("")
+    val combined = fromPart + toPart
+    if (combined.nonEmpty) {
+      val fromStr = appConfig.dateFrom.getOrElse("(open)")
+      val toStr = appConfig.dateTo.getOrElse("(open)")
+      logger.info(s"Applying FHIR date filter on $paramName: from=$fromStr to=$toStr")
+    }
+    combined
+  }
+
   protected def computePatientProfiles(
                                         dataDf: DataFrame,
                                         orderedCols: Seq[String]
@@ -35,7 +50,8 @@ abstract class BaseExtraction {
                                      rawResources: Seq[DataFrame],
                                      vocabularies: Map[String, Map[String, String]],
                                      dateSourceDf: Option[DataFrame] = None,
-                                     dateColumn: Option[String] = None
+                                     dateColumn: Option[String] = None,
+                                     patientIdColumn: String = "patient_id"
                                    )(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): DatasetStats = {
     import spark.implicits._
 
@@ -58,7 +74,7 @@ abstract class BaseExtraction {
     val maxAge = if (ageStats.isNullAt(1)) 0 else ageStats.getInt(1)
 
     val recordCount = finalProfileDf.count()
-    val uniquePatients = finalProfileDf.select("patient_id").distinct().count()
+    val uniquePatients = finalProfileDf.select(patientIdColumn).distinct().count()
     val columnInfo = finalProfileDf.schema.fields.map(f => (f.name, f.dataType.toString))
 
     val (startDate, endDate) =
