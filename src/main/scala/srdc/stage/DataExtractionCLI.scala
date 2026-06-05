@@ -4,7 +4,7 @@ import io.onfhir.spark.{FhirApiSource, FhirPagination, FhirPaginationMethods, Sp
 import org.apache.spark.sql.SparkSession
 import srdc.stage.config.{AppConfig, CommandLineArgumentParser}
 import org.slf4j.{Logger, LoggerFactory}
-import srdc.stage.jobs.{BaseExtraction, FullExtraction, ObservationExtraction, SurveyExtraction}
+import srdc.stage.jobs.{BaseExtraction, BundleExtraction, FullExtraction, ObservationExtraction, SurveyExtraction}
 import srdc.stage.rdf.{CatalogMetadataUserInput, DatasetStats, MetadataUserInput}
 
 /**
@@ -41,9 +41,22 @@ object DataExtractionCLI {
     val jobs = config.jobType.split(",").map(_.trim.toLowerCase)
     logger.info(s"Initiating extraction pipelines for ${jobs.length} module(s): ${jobs.mkString(", ").toUpperCase}")
 
+    val (bundleJobs, sparkJobs) = jobs.partition(_ == "bundle")
+    if (bundleJobs.nonEmpty) {
+      if (config.fhirServer == null || config.fhirServer.trim.isEmpty) {
+        logger.error("The 'bundle' job requires a FHIR server. Set --server or fhirServer in application.conf.")
+        System.exit(1)
+      }
+      bundleJobs.foreach { _ =>
+        val path = BundleExtraction.run(config)
+        logger.info(s"--- Bundle extraction complete: $path ---")
+      }
+      if (sparkJobs.isEmpty) System.exit(0)
+    }
+
     // No spark initialization when no FHIR server is provided
     if (config.fhirServer == null || config.fhirServer.trim.isEmpty) {
-      runJobsWithoutFhir(config, jobs)
+      runJobsWithoutFhir(config, sparkJobs)
       System.exit(0)
     }
 
@@ -79,7 +92,7 @@ object DataExtractionCLI {
       )
 
     var sharedCatalog: Option[CatalogMetadataUserInput] = None
-    val extractions = jobs.flatMap { jobName =>
+    val extractions = sparkJobs.flatMap { jobName =>
       logger.info(s"Extracting features from FHIR for module: $jobName")
       val jobMetadata = MetadataUserInput.load(config, jobName, sharedCatalog)
       if (sharedCatalog.isEmpty) sharedCatalog = Some(jobMetadata.catalog)
