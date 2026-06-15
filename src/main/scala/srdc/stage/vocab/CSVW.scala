@@ -16,4 +16,7 @@ object CSVW {
   final val table = m.createProperty(NS + "table")
   final val column = m.createProperty(NS + "column")
   final val primaryKey = m.createProperty(NS + "primaryKey")
+  final val required = m.createProperty(NS + "required")
+  final val minimum = m.createProperty(NS + "minimum")
+  final val maximum = m.createProperty(NS + "maximum")
 }

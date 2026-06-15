@@ -4,7 +4,7 @@ import io.onfhir.spark.SparkOnFhir
 import io.onfhir.spark.SparkOnFhirConversions._
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.{DataFrame, SparkSession}
-import org.slf4j.{Logger, LoggerFactory}
+import org.slf4j.Logger
 import srdc.stage.config.AppConfig
 import srdc.stage.rdf.{DatasetStats, MetadataUserInput, MetadataWriter}
 import srdc.stage.util.FileUtils
@@ -13,10 +13,25 @@ abstract class BaseExtraction {
 
   protected val logger: Logger
 
-  def run(appConfig: AppConfig, staticMetadata: MetadataUserInput)(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): Unit
+  def extractDataAndStats(appConfig: AppConfig, staticMetadata: MetadataUserInput)(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): (DataFrame, DatasetStats, String)
 
   protected def loadPatients()(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): DataFrame =
     sparkOnFhir.load("Patient?_searchafter").cache()
+
+  /**
+   * Date Time filter for fhir extraction
+   */
+  protected def buildDateFilter(appConfig: AppConfig, paramName: String): String = {
+    val fromPart = appConfig.dateFrom.map(v => s"&$paramName=ge$v").getOrElse("")
+    val toPart = appConfig.dateTo.map(v => s"&$paramName=le$v").getOrElse("")
+    val combined = fromPart + toPart
+    if (combined.nonEmpty) {
+      val fromStr = appConfig.dateFrom.getOrElse("(open)")
+      val toStr = appConfig.dateTo.getOrElse("(open)")
+      logger.info(s"Applying FHIR date filter on $paramName: from=$fromStr to=$toStr")
+    }
+    combined
+  }
 
   protected def computePatientProfiles(
                                         dataDf: DataFrame,
@@ -35,7 +50,8 @@ abstract class BaseExtraction {
                                      rawResources: Seq[DataFrame],
                                      vocabularies: Map[String, Map[String, String]],
                                      dateSourceDf: Option[DataFrame] = None,
-                                     dateColumn: Option[String] = None
+                                     dateColumn: Option[String] = None,
+                                     patientIdColumn: String = "patient_id"
                                    )(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): DatasetStats = {
     import spark.implicits._
 
@@ -58,7 +74,7 @@ abstract class BaseExtraction {
     val maxAge = if (ageStats.isNullAt(1)) 0 else ageStats.getInt(1)
 
     val recordCount = finalProfileDf.count()
-    val uniquePatients = finalProfileDf.select("patient_id").distinct().count()
+    val uniquePatients = finalProfileDf.select(patientIdColumn).distinct().count()
     val columnInfo = finalProfileDf.schema.fields.map(f => (f.name, f.dataType.toString))
 
     val (startDate, endDate) =
@@ -103,19 +119,23 @@ abstract class BaseExtraction {
       maxAge,
       columnInfo,
       vocabularies,
+      Map.empty[String, String],
       startDate,
       endDate,
       extractedSystems
     )
   }
 
-  protected def exportResults(
-                               cfg: AppConfig,
-                               meta: MetadataUserInput,
-                               dataDf: DataFrame,
-                               stats: DatasetStats,
-                               subFolder: String
-                             ): Unit = {
+  def exportResultsWithState(
+                              cfg: AppConfig,
+                              meta: MetadataUserInput,
+                              dataDf: DataFrame,
+                              jobStats: DatasetStats,
+                              globalStats: DatasetStats,
+                              subFolder: String,
+                              catalogUri: Option[String]
+                            ): String = {
+
     FileUtils.saveData(dataDf, s"${cfg.outputDir}/$subFolder", "csv")
     logger.info("Saved patient data to: {}/{}", cfg.outputDir, subFolder)
 
@@ -125,8 +145,35 @@ abstract class BaseExtraction {
       fdpEmail = cfg.fdpEmail.getOrElse(""),
       fdpPassword = cfg.fdpPassword.getOrElse(""),
       meta = meta,
-      stats = stats,
-      runMode = cfg.runMode
+      jobStats = jobStats,
+      globalStats = globalStats,
+      runMode = cfg.runMode,
+      sharedCatalogUri = catalogUri,
+      isFhirConfigured = true
+    )
+  }
+
+  /**
+   * Export used when no FHIR server is configured.
+   */
+  def exportResultsNoFhir(
+                           cfg: AppConfig,
+                           meta: MetadataUserInput,
+                           subFolder: String,
+                           catalogUri: Option[String]
+                         ): String = {
+    val emptyStats = DatasetStats(0, 0, 0, 0, Array.empty)
+    MetadataWriter.exportResults(
+      outputDir = s"${cfg.outputDir}/$subFolder/rdf",
+      fdpUrl = cfg.fdpUrl.getOrElse(""),
+      fdpEmail = cfg.fdpEmail.getOrElse(""),
+      fdpPassword = cfg.fdpPassword.getOrElse(""),
+      meta = meta,
+      jobStats = emptyStats,
+      globalStats = emptyStats,
+      runMode = cfg.runMode,
+      sharedCatalogUri = catalogUri,
+      isFhirConfigured = false
     )
   }
 }

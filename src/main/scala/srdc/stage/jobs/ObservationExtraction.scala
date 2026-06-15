@@ -6,8 +6,7 @@ import org.apache.spark.sql.functions._
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.slf4j.{Logger, LoggerFactory}
 import srdc.stage.config.AppConfig
-import srdc.stage.rdf.{DatasetStats, MetadataUserInput, MetadataWriter}
-import srdc.stage.util.FileUtils
+import srdc.stage.rdf.{DatasetStats, MetadataUserInput}
 
 /**
  * Main ETL pipeline for extracting Survey and Observation data.
@@ -24,12 +23,20 @@ object ObservationExtraction extends BaseExtraction {
    *
    * @return A DataFrame with columns [patient_id, metric_name, final_value].
    */
-  def extractObservations(rawObs: DataFrame)(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): DataFrame = {
+  def extractObservations(rawObs: DataFrame, rawPat: DataFrame)(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): DataFrame = {
     import spark.implicits._
+    val patientIdMap = rawPat
+      .fcolumn("id", "patient_uuid")
+      .fcolumn("identifier[0].value", "patient_identifier")
+      .extract()
+      .withColumn("pid", coalesce($"patient_identifier", $"patient_uuid"))
+      .select($"patient_uuid", $"pid")
+
     val obsSimple = rawObs
-      .fcolumn("subject.getReferenceKey(Patient)", "patient_id")
-      .fcolumn("effectiveDateTime", "timestamp", "string")
-      .fcolumn("code.coding.display.first().lower()", "metric_name")
+      .fcolumn("subject.getReferenceKey(Patient)", "patient_uuid")
+      .fcolumn("effectiveDateTime", "date", "string")
+      .fcolumn("code.coding.code.first()", "code")
+      .fcolumn("code.coding.display.first()", "display")
       .fcolumn("valueQuantity.value", "v_qty")
       .fcolumn("valueInteger", "v_int")
       .fcolumn("valueString", "v_str")
@@ -37,63 +44,108 @@ object ObservationExtraction extends BaseExtraction {
       .fcolumn("valueQuantity.unit", "unit")
       .extract()
       .withColumn("value_raw", coalesce($"v_qty", $"v_int", $"v_str", $"v_code"))
-      .withColumn("final_value",
+      .withColumn("value",
         when($"unit".isNotNull, concat($"value_raw", lit(" "), $"unit"))
           .otherwise($"value_raw")
       )
-      .select($"patient_id", $"metric_name".cast("string"), $"final_value".cast("string"))
+      .select(
+        $"patient_uuid",
+        $"code".cast("string"),
+        $"display".cast("string"),
+        $"value".cast("string"),
+        $"date".cast("string")
+      )
 
     val obsComponents = rawObs
       .where("component IS NOT NULL")
-      .fcolumn("subject.getReferenceKey(Patient)", "patient_id")
+      .fcolumn("subject.getReferenceKey(Patient)", "patient_uuid")
+      .fcolumn("effectiveDateTime", "date", "string")
       .fforEach("component", comp =>
         comp
-          .fcolumn("code.coding.display.first().lower()", "metric_name")
+          .fcolumn("code.coding.code.first()", "code")
+          .fcolumn("code.coding.display.first()", "display")
           .fcolumn("valueQuantity.value", "c_qty")
           .fcolumn("valueInteger", "c_int")
           .fcolumn("valueString", "c_str")
+          .fcolumn("valueBoolean", "c_bool")
+          .fcolumn("valueDateTime", "c_dt", "string")
+          .fcolumn("valueCodeableConcept.coding.display.first()", "c_code")
           .fcolumn("valueQuantity.unit", "unit")
       )
       .extract()
-      .withColumn("val", coalesce($"c_qty", $"c_int", $"c_str"))
-      .withColumn("final_value",
+      .withColumn("val",
+        coalesce(
+          $"c_qty".cast("string"), $"c_int".cast("string"),
+          $"c_str", $"c_bool".cast("string"), $"c_dt", $"c_code"
+        )
+      )
+      .withColumn("value",
         when($"unit".isNotNull, concat($"val", lit(" "), $"unit"))
           .otherwise($"val")
       )
-      .select($"patient_id", $"metric_name".cast("string"), $"final_value".cast("string"))
+      .select(
+        $"patient_uuid",
+        $"code".cast("string"),
+        $"display".cast("string"),
+        $"value".cast("string"),
+        $"date".cast("string")
+      )
 
-    obsSimple.union(obsComponents)
+    obsSimple
+      .union(obsComponents)
+      .where($"value".isNotNull)
+      .join(patientIdMap, Seq("patient_uuid"), "left")
+      // If no identifier, use FHIR UUID
+      .withColumn("pid", coalesce($"pid", $"patient_uuid"))
+      .select($"pid", $"code", $"display", $"value", $"date")
   }
 
   /**
-   * Execute the Survey Extraction pipeline.
+   * Execute the Observation Extraction pipeline.
    *
    * @param appConfig      The base application configuration object passed from the CLI.
    * @param staticMetadata The loaded static metadata configuration (from JSON, Excel, or Browser).
    * @param spark          The active SparkSession.
    * @param sparkOnFhir    The active SparkOnFhir entry point.
    */
-  override def run(appConfig: AppConfig, staticMetadata: MetadataUserInput)(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): Unit = {
+  override def extractDataAndStats(appConfig: AppConfig, staticMetadata: MetadataUserInput)(implicit spark: SparkSession, sparkOnFhir: SparkOnFhir): (DataFrame, DatasetStats, String) = {
     import spark.implicits._
 
     // Load the raw FHIR DataFrames ONCE to avoid redundant server calls
-    val rawObs = sparkOnFhir.load("Observation?_searchafter").cache()
+    val rawObs = sparkOnFhir.load(s"Observation?_searchafter${buildDateFilter(appConfig, "date")}").cache()
     val rawPat = loadPatients()
 
-    val observations = extractObservations(rawObs)
+    val observations = extractObservations(rawObs, rawPat)
 
-    val obsCols = observations.select("metric_name").distinct().as[String].collect().sorted.toSeq
-    val patientProfiles = computePatientProfiles(observations, obsCols)
+    // Build a SKOS vocabulary
+    val vocabRows = observations
+      .where($"code".isNotNull && $"display".isNotNull)
+      .select("code", "display")
+      .distinct()
+      .as[(String, String)]
+      .collect()
 
-    val stats = computeDatasetStats(
-      finalProfileDf = patientProfiles,
+    val observationVocabId = "observation_codes"
+    val vocabularies: Map[String, Map[String, String]] =
+      if (vocabRows.nonEmpty) Map(observationVocabId -> vocabRows.toMap)
+      else Map.empty
+
+    val columnMapping: Map[String, String] =
+      if (vocabRows.nonEmpty) Map("code" -> observationVocabId, "display" -> observationVocabId)
+      else Map.empty
+
+    val baseStats = computeDatasetStats(
+      finalProfileDf = observations,
       rawPatients = rawPat,
       rawResources = Seq(rawObs, rawPat),
-      vocabularies = Map.empty,
+      vocabularies = vocabularies,
       dateSourceDf = Some(rawObs),
-      dateColumn = Some("effectiveDateTime")
+      dateColumn = Some("effectiveDateTime"),
+      patientIdColumn = "pid"
     )
 
-    exportResults(appConfig, staticMetadata, patientProfiles, stats, "observation_profiles")
+    val stats = baseStats.copy(columnToVocabId = columnMapping)
+
+    (observations, stats, "observation_profiles")
   }
 }

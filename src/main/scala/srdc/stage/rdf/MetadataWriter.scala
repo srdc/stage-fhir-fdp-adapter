@@ -21,6 +21,7 @@ import java.util.UUID
  * @param maxAge         Maximum age of patients found in the cohort.
  * @param columns        Array of column name and type pairs, used for CSVW schema generation.
  * @param vocabularies   Map of question/variable IDs to their code-display value pairs (for SKOS).
+ * @param columnToVocabId Map bridging CSV column names to their short vocabulary identifiers.
  * @param startDate      Dynamically extracted earliest date from the dataset entries.
  * @param endDate        Dynamically extracted latest date from the dataset entries.
  * @param codingSystems  Dynamically extracted list of unique coding systems found in the dataset.
@@ -32,10 +33,36 @@ case class DatasetStats(
                          maxAge: Int,
                          columns: Array[(String, String)],
                          vocabularies: Map[String, Map[String, String]] = Map.empty,
+                         columnToVocabId: Map[String, String] = Map.empty,
                          startDate: Option[String] = None,
                          endDate: Option[String] = None,
                          codingSystems: Seq[String] = Seq.empty
                        )
+
+object DatasetStats {
+  def mergeGlobal(statsList: Seq[DatasetStats]): DatasetStats = {
+    if (statsList.isEmpty) return DatasetStats(0, 0, 0, 0, Array.empty)
+
+    def minDate(d1: Option[String], d2: Option[String]): Option[String] =
+      (d1 ++ d2).reduceOption((a, b) => if (a < b) a else b)
+
+    def maxDate(d1: Option[String], d2: Option[String]): Option[String] =
+      (d1 ++ d2).reduceOption((a, b) => if (a > b) a else b)
+
+    DatasetStats(
+      recordCount = statsList.map(_.recordCount).sum,
+      uniquePatients = statsList.map(_.uniquePatients).max,
+      minAge = statsList.map(_.minAge).filter(_ > 0).reduceOption(_ min _).getOrElse(0),
+      maxAge = statsList.map(_.maxAge).max,
+      columns = Array.empty,
+      vocabularies = Map.empty,
+      columnToVocabId = Map.empty,
+      startDate = statsList.map(_.startDate).reduceLeftOption(minDate).flatten,
+      endDate = statsList.map(_.endDate).reduceLeftOption(maxDate).flatten,
+      codingSystems = statsList.flatMap(_.codingSystems).distinct
+    )
+  }
+}
 
 /**
  * Handles the generation and publication of FAIR Data Point (FDP) metadata.
@@ -96,8 +123,9 @@ object MetadataWriter {
     if (uri == null || uri.trim.isEmpty) m.createResource("") else m.createResource(uri)
   }
 
-  /** * Prevents invalid URI characters (like spaces) from breaking the Turtle Parser.
-   * * @param m      The Jena Model.
+  /**
+   * Prevents invalid URI characters (like spaces) from breaking the Turtle Parser.
+   * @param m      The Jena Model.
    * @param uriStr The raw URI string to sanitize.
    * @return The sanitized Jena Resource.
    */
@@ -110,24 +138,25 @@ object MetadataWriter {
    * Main orchestration method for exporting metadata.
    *
    * This method manages the lifecycle of metadata creation:
-   * 1.  Catalog: Checks if an existing catalog should be used or a new one created.
-   * If creating new on FDP, it POSTs the catalog and retrieves the generated ID.
-   * 2.  Dataset: Creates the Dataset metadata linked to the Catalog ID.
-   * POSTs to FDP if enabled and retrieves the new Dataset ID.
-   * 3.  Distribution: Creates the Distribution metadata linked to the Dataset ID.
-   * 4.  Local Files: Generates CSVW schema and SKOS vocabularies locally.
+   * 1.  Catalog: Checks if an existing catalog should be used or a new one created globally.
+   * 2.  Dataset: Creates the Dataset metadata linked to the Catalog.
+   * 3.  Distribution: Creates the Distribution metadata linked to the Dataset.
+   * 4.  Local Files: Generates CSVW schemas (engraved with SKOS vocabularies) locally.
    *
    * All generated models are also saved as Turtle (.ttl) files in the output directory.
    *
-   * @param outputDir   The local directory path to output the TTL files.
-   * @param fdpUrl      The FAIR Data Point URL.
-   * @param fdpEmail    The authentication email for the FAIR Data Point.
-   * @param fdpPassword The authentication password for the FAIR Data Point.
-   * @param meta        The configuration object containing metadata fields.
-   * @param stats       The calculated statistics from the ETL pipeline.
-   * @param runMode     The mode the application is running in (JSON, Excel, or Browser).
+   * @param outputDir        The local directory path to output the TTL files.
+   * @param fdpUrl           The FAIR Data Point URL.
+   * @param fdpEmail         The authentication email for the FAIR Data Point.
+   * @param fdpPassword      The authentication password for the FAIR Data Point.
+   * @param meta             The configuration object containing metadata fields.
+   * @param jobStats         The calculated job-specific statistics from the ETL pipeline.
+   * @param globalStats      The aggregated global statistics across all executed jobs.
+   * @param runMode          The mode the application is running in (JSON, Excel, or Browser).
+   * @param sharedCatalogUri An optional URI to reuse an existing Catalog across multiple jobs.
+   * @return The URI of the Catalog used or created.
    */
-  def exportResults(outputDir: String, fdpUrl: String, fdpEmail: String, fdpPassword: String, meta: MetadataUserInput, stats: DatasetStats, runMode: String): Unit = {
+  def exportResults(outputDir: String, fdpUrl: String, fdpEmail: String, fdpPassword: String, meta: MetadataUserInput, jobStats: DatasetStats, globalStats: DatasetStats, runMode: String, sharedCatalogUri: Option[String] = None, isFhirConfigured: Boolean = true): String = {
     logger.info("Starting Metadata Export...")
 
     val isFdpMode = fdpUrl.trim.nonEmpty && fdpEmail.trim.nonEmpty
@@ -145,40 +174,36 @@ object MetadataWriter {
     }
 
     // 1. Catalog
-    val configuredCatalogUri = meta.catalog.uri.getOrElse("")
-    val finalCatalogUri: String = if (isFdpMode && meta.catalog.existing.contains(true) && configuredCatalogUri.startsWith(fdpUrl)) {
-      logger.info("Using Existing Valid FDP Catalog URI: {}", configuredCatalogUri)
-      val model = createCatalogModel(meta, stats, configuredCatalogUri, isFdpMode, fdpUrl, runMode)
-      saveLocalFile(outputDir, "Catalog", model)
-      configuredCatalogUri
-    } else if (isFdpMode) {
-      logger.info("Creating NEW Catalog on FDP...")
-      val model = createCatalogModel(meta, stats, "", isFdpMode, fdpUrl, runMode)
-      saveLocalFile(outputDir, "Catalog", model)
-      val loc = postToFdp(fdpUrl, fdpEmail, fdpPassword, "catalog", model)
-      logger.info("Catalog confirmed at: {}", loc)
-      loc
-    } else {
-      val uri = if (meta.catalog.existing.contains(true) && configuredCatalogUri.trim.nonEmpty) configuredCatalogUri.trim else s"urn:uuid:${UUID.randomUUID()}"
-      logger.info("Generating Local Catalog with URI: {}", uri)
-      val model = createCatalogModel(meta, stats, uri, isFdpMode, fdpUrl, runMode)
-      saveLocalFile(outputDir, "Catalog", model)
-      uri
+    val finalCatalogUri: String = sharedCatalogUri.getOrElse {
+      val configuredCatalogUri = meta.catalog.uri.getOrElse("")
+      if (isFdpMode && meta.catalog.existing.contains(true) && configuredCatalogUri.startsWith(fdpUrl)) {
+        logger.info("Using Existing Valid FDP Catalog URI: {}", configuredCatalogUri)
+        configuredCatalogUri
+      } else if (isFdpMode) {
+        logger.info("Creating NEW Catalog on FDP...")
+        val model = createCatalogModel(meta, globalStats, "", isFdpMode, fdpUrl, runMode)
+        val loc = postToFdp(fdpUrl, fdpEmail, fdpPassword, "catalog", model)
+        logger.info("Catalog confirmed at: {}", loc)
+        loc
+      } else {
+        val uri = if (meta.catalog.existing.contains(true) && configuredCatalogUri.trim.nonEmpty) configuredCatalogUri.trim else s"urn:uuid:${UUID.randomUUID()}"
+        logger.info("Generating Local Catalog with URI: {}", uri)
+        uri
+      }
     }
+    saveLocalFile(outputDir, "Catalog", createCatalogModel(meta, globalStats, finalCatalogUri, isFdpMode, fdpUrl, runMode))
 
-    // 2. Dataset
-    logger.info("Preparing Dataset (Linking to Parent Catalog: {})...", finalCatalogUri)
-    val initialDatasetUri = if (isFdpMode) "" else s"urn:uuid:${UUID.randomUUID()}"
-    val datasetModel = createDatasetModel(meta, stats, finalCatalogUri, initialDatasetUri, runMode)
-    saveLocalFile(outputDir, "Dataset", datasetModel)
-
+    // 2. Dataset (Uses Job-Specific Stats)
     val finalDatasetUri = if (isFdpMode) {
+      logger.info("Creating NEW Dataset on FDP...")
+      val datasetModel = createDatasetModel(meta, jobStats, finalCatalogUri, "", runMode)
       val loc = postToFdp(fdpUrl, fdpEmail, fdpPassword, "dataset", datasetModel)
       logger.info("Dataset created at: {}", loc)
       loc
     } else {
-      initialDatasetUri
+      s"urn:uuid:${UUID.randomUUID()}"
     }
+    saveLocalFile(outputDir, "Dataset", createDatasetModel(meta, jobStats, finalCatalogUri, finalDatasetUri, runMode))
 
     // 3. Main Distribution
     logger.info("Preparing Distribution (Linking to Parent Dataset: {})...", finalDatasetUri)
@@ -186,18 +211,46 @@ object MetadataWriter {
     val distModel = createDistributionModel(meta.distribution, finalDatasetUri, initialDistUri)
     saveLocalFile(outputDir, "Distribution", distModel)
 
-    if (isFdpMode) {
+    val finalDistUri = if (isFdpMode) {
       val loc = postToFdp(fdpUrl, fdpEmail, fdpPassword, "distribution", distModel)
       logger.info("Distribution created at: {}", loc)
+      loc
+    } else {
+      initialDistUri
     }
 
-    // 4. Extras
-    saveLocalFile(outputDir, "CSVW", createCsvwModel(stats))
-    if (stats.vocabularies.nonEmpty) {
-      saveLocalFile(outputDir, "Vocabularies", createConceptSchemes(stats))
+    // 4. CSVW
+    val initialCsvwUri = if (isFdpMode) "" else s"urn:uuid:${UUID.randomUUID()}"
+    val csvwModel = if (isFhirConfigured) {
+      val model = createCsvwModel(jobStats, initialCsvwUri, finalDistUri)
+      if (jobStats.vocabularies.nonEmpty) {
+        model.add(createConceptSchemes(jobStats))
+      }
+      model
+    } else {
+      val fields = meta.dataDictionary.getOrElse(List.empty)
+      if (fields.isEmpty) {
+        logger.warn("No FHIR server configured and no Data Dictionary sheet present — CSVW will be empty.")
+      }
+      createDictionaryModel(
+        fields = fields,
+        vocabularies = meta.dataDictionaryValueSets,
+        subjectUri = initialCsvwUri,
+        parentDistributionUri = finalDistUri
+      )
     }
 
-    logger.info("Metadata generation completed successfully.")
+    saveLocalFile(outputDir, "CSVW", csvwModel)
+
+    if (isFdpMode) {
+      val loc = postToFdp(fdpUrl, fdpEmail, fdpPassword, "csvw", csvwModel)
+      logger.info("CSVW created at: {}", loc)
+      logger.info("Metadata Generation and FDP Validations are Successfully Completed")
+    } else {
+      logger.info("Metadata Generation is Successfully Completed")
+    }
+
+    finalCatalogUri
   }
 
   /**
@@ -529,27 +582,56 @@ object MetadataWriter {
    * Generates a CSV on the Web (CSVW) schema model.
    * This describes the structure of the CSV file, including column names and data types.
    *
-   * @param stats DatasetStats containing the column definitions extracted from the dataframe.
+   * @param stats      DatasetStats containing the column definitions extracted from the dataframe.
+   * @param subjectUri The URI assigned to the CSVW Resource by the FDP server.
+   * @param parentUri  The URI of the parent Distribution (for dct:isPartOf linking).
    * @return A populated Jena Model representing the CSVW schema.
    */
-  private def createCsvwModel(stats: DatasetStats): Model = {
+  private def createCsvwModel(stats: DatasetStats, subjectUri: String, parentUri: String): Model = {
     val m = createModel()
-    val tableGroup = m.createResource("urn:uuid:" + UUID.randomUUID()).addProperty(RDF.`type`, CSVW.TableGroup)
-    val table = m.createResource("urn:uuid:" + UUID.randomUUID()).addProperty(RDF.`type`, CSVW.Table).addProperty(DCTerms.title, "Tabular data schema")
+
+    val tableGroup = createSubject(m, subjectUri)
+      .addProperty(RDF.`type`, CSVW.TableGroup)
+      .addProperty(DCTerms.title, m.createLiteral("Cohort Data Schema", "en"))
+      .addProperty(DCTerms.description, m.createLiteral("CSVW schema describing the flattened cohort dataset.", "en"))
+
+    if (parentUri.nonEmpty) {
+      tableGroup.addProperty(DCTerms.isPartOf, m.createResource(parentUri))
+    }
+
+    val table = m.createResource("urn:uuid:" + UUID.randomUUID())
+      .addProperty(RDF.`type`, CSVW.Table)
+      .addProperty(DCTerms.title, m.createLiteral("Tabular Data", "en"))
+      .addProperty(m.createProperty(CSVW.NS + "url"), m.createResource("file:///dataset.csv"))
+
     tableGroup.addProperty(CSVW.table, table)
 
     stats.columns.foreach { case (colName, colType) =>
       val col = m.createResource("urn:uuid:" + UUID.randomUUID())
         .addProperty(RDF.`type`, CSVW.Column)
-        .addProperty(CSVW.name, colName)
-        .addProperty(CSVW.titles, colName)
+
+      val sanitizedName = colName.toLowerCase.replaceAll("[^a-z0-9]+", "_").replaceAll("^_+|_+$", "")
+
+      col.addProperty(CSVW.name, m.createTypedLiteral(sanitizedName, XSDDatatype.XSDstring))
+      col.addProperty(CSVW.titles, m.createLiteral(colName, "en"))
+      col.addProperty(DCTerms.description, m.createLiteral(s"Data values for $colName", "en"))
+
+      if (stats.columnToVocabId.contains(colName)) {
+        val shortId = stats.columnToVocabId(colName)
+        if (stats.vocabularies.contains(shortId)) {
+          val propertyUrlPredicate = m.createProperty("http://www.w3.org/ns/csvw#propertyUrl")
+          col.addProperty(propertyUrlPredicate, m.createResource(s"$VOCAB_BASE/$shortId"))
+        }
+      }
+
       val dt = colType.toLowerCase match {
         case t if t.contains("int") || t.contains("long") => "integer"
         case t if t.contains("double") || t.contains("float") => "double"
         case t if t.contains("binary") => "binary"
         case _ => "string"
       }
-      col.addProperty(CSVW.datatype, dt)
+      col.addProperty(CSVW.datatype, m.createTypedLiteral(dt, XSDDatatype.XSDstring))
+
       table.addProperty(CSVW.column, col)
     }
     m
@@ -567,6 +649,203 @@ object MetadataWriter {
     stats.vocabularies.foreach { case (colName, options) =>
       val schemeUri = s"$VOCAB_BASE/$colName"
       val scheme = m.createResource(schemeUri).addProperty(RDF.`type`, SKOS.ConceptScheme).addProperty(DCTerms.title, s"Vocabulary for $colName")
+      options.foreach { case (code, display) =>
+        val concept = m.createResource(s"$schemeUri/$code")
+          .addProperty(RDF.`type`, SKOS.Concept)
+          .addProperty(SKOS.inScheme, scheme)
+          .addProperty(SKOS.notation, code)
+          .addProperty(SKOS.prefLabel, m.createLiteral(display, "en"))
+        scheme.addProperty(SKOS.hasTopConcept, concept)
+      }
+    }
+    m
+  }
+
+  /**
+   * Creates a standalone Dictionary RDF Model from parsed Data Dictionary fields.
+   * Generates a CSVW TableGroup describing each variable with its metadata.
+   * (name, title, datatype, description, propertyUrl, unit)
+   *
+   * Used by the "dictionary" job to produce a Dictionary.ttl without requiring any FHIR extraction or Dataset/Distribution context.
+   * @param fields The list of CsvwField entries parsed from the Data Dictionary Excel sheet.
+   * @param vocabularies Map of variable name to its code -> display pairs from Value Sets sheet.
+   * @return A populated Jena Model representing the dictionary as a CSVW schema with SKOS vocabularies.
+   */
+  def createDictionaryModel(fields: List[CsvwField], vocabularies: Map[String, Map[String, String]] = Map.empty, subjectUri: String = "", parentDistributionUri: String = ""): Model = {
+    val m = createModel()
+    val qudtUnit = m.createProperty("http://qudt.org/schema/qudt/unit")
+
+    val COHORT_NS = "http://example.org/cohort#"
+    m.setNsPrefix("cohort", COHORT_NS)
+    val cohortSampleSize = m.createProperty(COHORT_NS + "sampleSize")
+    val cohortIsIdentifier = m.createProperty(COHORT_NS + "isIdentifier")
+    val cohortSelectionStatus = m.createProperty(COHORT_NS + "selectionStatus")
+    val cohortConditionalOn = m.createProperty(COHORT_NS + "conditionalOn")
+    val cohortFromStudy = m.createProperty(COHORT_NS + "fromStudy")
+
+    val responsibleRole = m.createResource("http://example.org/cohort/role/responsible")
+
+    // URI-safe slug for SKOS concept fragments (Study, Group)
+    def slug(s: String): String = s.trim.replaceAll("\\s+", "_").replaceAll("[<>\"{}|\\\\^`#]", "")
+
+    val tableGroup = createSubject(m, subjectUri)
+      .addProperty(RDF.`type`, CSVW.TableGroup)
+      .addProperty(DCTerms.title, m.createLiteral("Data Dictionary Schema", "en"))
+      .addProperty(DCTerms.description, m.createLiteral("CSVW schema describing the variables defined in the data dictionary.", "en"))
+
+    if (parentDistributionUri.nonEmpty) {
+      tableGroup.addProperty(DCTerms.isPartOf, m.createResource(parentDistributionUri))
+    }
+
+    val table = m.createResource(s"urn:uuid:${UUID.randomUUID()}")
+      .addProperty(RDF.`type`, CSVW.Table)
+      .addProperty(DCTerms.title, m.createLiteral("Variable Definitions", "en"))
+
+    tableGroup.addProperty(CSVW.table, table)
+
+    val studyScheme = m.createResource(s"$VOCAB_BASE/study")
+      .addProperty(RDF.`type`, SKOS.ConceptScheme)
+      .addProperty(DCTerms.title, m.createLiteral("Studies / Cohorts", "en"))
+
+    val sectionScheme = m.createResource(s"$VOCAB_BASE/section")
+      .addProperty(RDF.`type`, SKOS.ConceptScheme)
+      .addProperty(DCTerms.title, m.createLiteral("Variable groups / sections", "en"))
+
+    val parentGroupScheme = m.createResource(s"$VOCAB_BASE/parent-group")
+      .addProperty(RDF.`type`, SKOS.ConceptScheme)
+      .addProperty(DCTerms.title, m.createLiteral("Parent groups (coarser groupings above Section)", "en"))
+
+    val selectionScheme = m.createResource(s"$VOCAB_BASE/selection")
+      .addProperty(RDF.`type`, SKOS.ConceptScheme)
+      .addProperty(DCTerms.title, m.createLiteral("Variable selection / inclusion status", "en"))
+
+    fields.foreach { f =>
+      val col = m.createResource(s"urn:uuid:${UUID.randomUUID()}")
+        .addProperty(RDF.`type`, CSVW.Column)
+
+      col.addProperty(CSVW.name, m.createTypedLiteral(f.name, XSDDatatype.XSDstring))
+      col.addProperty(CSVW.titles, m.createLiteral(f.title, "en"))
+      col.addProperty(CSVW.datatype, m.createTypedLiteral(f.datatype, XSDDatatype.XSDstring))
+      f.description.foreach(d => col.addProperty(DCTerms.description, m.createLiteral(d, "en")))
+      f.propertyUrl.filter(_.nonEmpty).foreach(p => col.addProperty(CSVW.propertyURL, m.createResource(p)))
+      f.unit.filter(_.nonEmpty).foreach(u => col.addProperty(qudtUnit, u))
+
+      f.study.filter(_.nonEmpty).foreach { s =>
+        val concept = m.createResource(s"$VOCAB_BASE/study/${slug(s)}")
+          .addProperty(RDF.`type`, SKOS.Concept)
+          .addProperty(SKOS.inScheme, studyScheme)
+          .addProperty(SKOS.prefLabel, m.createLiteral(s, "en"))
+        studyScheme.addProperty(SKOS.hasTopConcept, concept)
+        col.addProperty(cohortFromStudy, concept)
+      }
+
+      f.group.filter(_.nonEmpty).foreach { g =>
+        val concept = m.createResource(s"$VOCAB_BASE/section/${slug(g)}")
+          .addProperty(RDF.`type`, SKOS.Concept)
+          .addProperty(SKOS.inScheme, sectionScheme)
+          .addProperty(SKOS.prefLabel, m.createLiteral(g, "en"))
+        sectionScheme.addProperty(SKOS.hasTopConcept, concept)
+        col.addProperty(SKOS.broader, concept)
+      }
+
+      f.subpopulation.filter(_.nonEmpty).foreach(sp =>
+        col.addLiteral(HealthDCATAP.populationCoverage, sp)
+      )
+
+      f.sampleSize.filter(_.nonEmpty).foreach { n =>
+        n.trim.toLongOption match {
+          case Some(v) => col.addLiteral(cohortSampleSize, m.createTypedLiteral(v, XSDDatatype.XSDnonNegativeInteger))
+          case None    => col.addProperty(cohortSampleSize, m.createLiteral(n, "en"))
+        }
+      }
+
+      f.dataOwner.filter(_.nonEmpty).foreach { owner =>
+        val agent = m.createResource()
+          .addProperty(RDF.`type`, FOAF.Agent)
+          .addProperty(FOAF.name, owner)
+        col.addProperty(DCTerms.rightsHolder, agent)
+      }
+
+      f.identifier.filter(_.nonEmpty).foreach { flag =>
+        val truthy = Set("yes", "y", "true", "1")
+        val v = truthy.contains(flag.trim.toLowerCase)
+        col.addLiteral(cohortIsIdentifier, m.createTypedLiteral(v, XSDDatatype.XSDboolean))
+      }
+
+      // Selection -> SKOS Concept
+      f.selection.filter(_.nonEmpty).foreach { s =>
+        val concept = m.createResource(s"$VOCAB_BASE/selection/${slug(s)}")
+          .addProperty(RDF.`type`, SKOS.Concept)
+          .addProperty(SKOS.inScheme, selectionScheme)
+          .addProperty(SKOS.prefLabel, m.createLiteral(s, "en"))
+        selectionScheme.addProperty(SKOS.hasTopConcept, concept)
+        col.addProperty(cohortSelectionStatus, concept)
+      }
+
+      // Parent Group -> skos:broader
+      f.parentGroup.filter(_.nonEmpty).foreach { pg =>
+        val concept = m.createResource(s"$VOCAB_BASE/parent-group/${slug(pg)}")
+          .addProperty(RDF.`type`, SKOS.Concept)
+          .addProperty(SKOS.inScheme, parentGroupScheme)
+          .addProperty(SKOS.prefLabel, m.createLiteral(pg, "en"))
+        parentGroupScheme.addProperty(SKOS.hasTopConcept, concept)
+        col.addProperty(SKOS.broader, concept)
+      }
+
+      // Responsible -> prov:qualifiedAttribution
+      f.responsible.filter(_.nonEmpty).foreach { person =>
+        val attribution = m.createResource()
+          .addProperty(RDF.`type`, PROV.Attribution)
+          .addProperty(DCAT.hadRole, responsibleRole)
+          .addProperty(PROV.agent,
+            m.createResource()
+              .addProperty(RDF.`type`, FOAF.Agent)
+              .addProperty(FOAF.name, person)
+          )
+        col.addProperty(PROV.qualifiedAttribution, attribution)
+      }
+
+      // Note -> skos:scopeNote
+      f.note.filter(_.nonEmpty).foreach(n =>
+        col.addProperty(SKOS.scopeNote, m.createLiteral(n, "en"))
+      )
+
+      // Min / Max -> csvw:minimum, csvw:maximum
+      def emitBoundary(prop: org.apache.jena.rdf.model.Property, raw: String): Unit = {
+        val t = raw.trim
+        t.toLongOption match {
+          case Some(v) => col.addLiteral(prop, m.createTypedLiteral(v, XSDDatatype.XSDinteger))
+          case None => t.toDoubleOption match {
+            case Some(v) => col.addLiteral(prop, m.createTypedLiteral(v, XSDDatatype.XSDdouble))
+            case None    => col.addProperty(prop, m.createLiteral(t, "en"))
+          }
+        }
+      }
+      f.minValue.filter(_.nonEmpty).foreach(emitBoundary(CSVW.minimum, _))
+      f.maxValue.filter(_.nonEmpty).foreach(emitBoundary(CSVW.maximum, _))
+
+      // Required -> csvw:required xsd:boolean
+      f.required.filter(_.nonEmpty).foreach { flag =>
+        val truthy = Set("yes", "y", "true", "1")
+        val v = truthy.contains(flag.trim.toLowerCase)
+        col.addLiteral(CSVW.required, m.createTypedLiteral(v, XSDDatatype.XSDboolean))
+      }
+
+      // Conditional On -> cohort:conditionalOn literal
+      f.conditionalOn.filter(_.nonEmpty).foreach(expr =>
+        col.addProperty(cohortConditionalOn, m.createLiteral(expr, "en"))
+      )
+
+      table.addProperty(CSVW.column, col)
+    }
+
+    // Embed SKOS ConceptSchemes for variables with value sets (same pattern as createConceptSchemes)
+    vocabularies.foreach { case (varName, options) =>
+      val schemeUri = s"$VOCAB_BASE/$varName"
+      val scheme = m.createResource(schemeUri)
+        .addProperty(RDF.`type`, SKOS.ConceptScheme)
+        .addProperty(DCTerms.title, s"Vocabulary for $varName")
+
       options.foreach { case (code, display) =>
         val concept = m.createResource(s"$schemeUri/$code")
           .addProperty(RDF.`type`, SKOS.Concept)

@@ -10,14 +10,19 @@ The pipeline performs the following key operations:
 
 1. Extracts raw FHIR resources (`Patient`, `Observation`, `QuestionnaireResponse`, `Questionnaire`).
 2. Resolves terminology by joining patient answers with full Questionnaire definitions.
-3. Transforms data into a wide-format patient profile with one row per patient.
-4. Generates FAIR metadata:
-* DCAT: Catalog, Dataset, and Distribution descriptions.
-* CSVW: Schema definitions for the output data.
-* SKOS: Concept schemes mapping survey codes to human-readable displays.
+3. Flattens the data into a long-format CSV - one row per reading/answer - with the schema:
+   * **Observation job** -> `pid, code, display, value, date`
+   * **Survey job** -> `pid, code, display, answer, date`
+   * **Full Extraction job** (combined) -> `pid, code, display, value, date` (Survey rows have their `answer` column renamed to `value` at the union)
 
-
-5. **Publishes metadata directly to a FAIR Data Point (FDP) and/or saves locally as Turtle (`.ttl`) files.
+   The `pid` is taken from `Patient.identifier[0].value` (falling back to the FHIR resource id when no identifier exists). Each row carries the timestamp of the underlying reading/response, so multiple readings of the same code for the same patient remain as distinct rows.
+4. Optionally restricts the extraction to a configurable time window (`--date-from`/`--date-to` or `--reference`/`--window`).
+5. Optionally produces a raw FHIR transaction `bundle.json` mirroring exactly what would be extracted (the `bundle` job).
+6. Generates FAIR metadata:
+   * **DCAT** - Catalog, Dataset, and Distribution descriptions.
+   * **CSVW** - schema definition for the five output columns, with `code`/`display` linked to a per-job SKOS concept scheme.
+   * **SKOS** - concept schemes recording the unique observation codes and questionnaire item codes seen in the data, plus per-question answer-option value sets.
+7. Publishes metadata to a FAIR Data Point (FDP) and/or saves locally as Turtle (`.ttl`) files.
 
 ---
 
@@ -75,14 +80,6 @@ Descriptive FAIR metadata (Catalog details, Publisher, Access Rights, etc.) is i
 * **`json`**: Automatically loads metadata from the configured `config.json` file.
 * **`excel`**: Automatically loads metadata from the configured `config.xlsx` file.
 
-### 2. Configure Run Mode
-
-The application supports different ways to load these configurations:
-
-* **`browser`** (Default): Loads a web form to fill in the config data in runtime..
-* **`json`**: Automatically loads a standard `config.json` from the classpath/working dir.
-* **`excel`**: Automatically loads a standard `config.xlsx` from the classpath/working dir.
-
 ---
 
 ## Usage
@@ -99,7 +96,7 @@ You can customize the job type, output format, configuration mode, and directly 
 
 | Argument | Default | Description |
 | --- | --- | --- |
-| `--job` | `survey` | The ETL pipeline to run. Supports: `survey`, `observation` or `full` extraction (Can be extended for cohorts) |
+| `--job` | `observation,survey` | The ETL pipeline to run. Supports: `survey`, `observation`, `full` (combined), or `bundle` (raw FHIR Bundle export, bypasses Spark). Multiple jobs can be comma-separated. |
 | `--format` | `csv` | The output format for the patient data (`csv` or `parquet`). |
 | `--runMode` | `browser` | How the app loads metadata configuration (`json`, `excel`, or `browser`). |
 | `--fhirUrl` | *(from conf)* | Override the source FHIR server URL. |
@@ -109,16 +106,73 @@ You can customize the job type, output format, configuration mode, and directly 
 | `--outputDir` | *(from conf)* | Override the output directory for generated files. |
 | `--jsonPath` | *(from conf)* | Override the path to the `config.json` file. |
 | `--excelPath` | *(from conf)* | Override the path to the `config.xlsx` file. |
+| `--date-from` | *(none)* | Lower bound (inclusive) for the FHIR search window. Accepts ISO date (`2026-03-01`) or date-time (`2026-03-01T00:00:00Z`). |
+| `--date-to` | *(none)* | Upper bound (inclusive) for the FHIR search window. Same accepted formats. |
+| `--reference` | *(none)* | Anchor date for a centered window. Must be paired with `--window`. |
+| `--window` | *(none)* | Half-width around `--reference`, given as an ISO-8601 duration: `P30D`, `P6M`, `P1Y`, `PT12H`, etc. Resolved into `[reference - window, reference + window]`. |
+
+### Time-window filter
+
+When any date flag is supplied, the filter is appended to the FHIR search URL - `Observation` is filtered by `date`, `QuestionnaireResponse` by `authored`. `Patient` and `Questionnaire` definitions are always loaded unfiltered so subjects and answer-option vocabularies remain resolvable.
+
+The explicit (`--date-from`/`--date-to`) and centered (`--reference`/`--window`) forms are mutually exclusive. Examples:
+
+```bash
+# Explicit, one-sided window - everything from March 2026 onward.
+./run-cli.sh --date-from 2026-03-01
+
+# Explicit two-sided window.
+./run-cli.sh --date-from 2026-03-01 --date-to 2026-04-30
+
+# Centered window: 6 months on either side of the reference date.
+./run-cli.sh --reference 2026-04-01 --window P6M
+```
+
+Resources missing the indexed date field are excluded when a filter is active.
+
+### Bundle extraction (raw FHIR export)
+
+The `bundle` job is a non-analytic counterpart to the extraction pipelines. It hits the FHIR server directly (no Spark), pages through `Patient`, `Observation`, `QuestionnaireResponse`, and `Questionnaire` searches, and writes a single FHIR transaction Bundle to:
+
+```
+<outputDir>/bundle_extraction/bundle.json
+```
+
+Each entry carries a `request.method` of `PUT` (when the resource has an `id` — upsert semantics) or `POST` (when it doesn't), so the file is self-contained and can be POSTed to another FHIR server to recreate the dataset.
+
+The `--date-from` / `--date-to` / `--reference` / `--window` flags apply here as well: `Observation` is filtered by `date`, `QuestionnaireResponse` by `authored`. `Patient` and `Questionnaire` definitions are always pulled un-filtered (subjects + value-set lookups must remain resolvable).
+
+```bash
+# Plain export of everything currently on the server.
+./run-cli.sh --job bundle
+
+# Filtered export covering March-April 2026.
+./run-cli.sh --job bundle --date-from 2026-03-01 --date-to 2026-04-30
+
+# Bundle export AND a flat Observation extraction in the same run.
+./run-cli.sh --job bundle,observation
+```
+
+The bundle job produces neither CSV nor RDF — its only output is `bundle.json`.
 
 ---
 
 ## Output
 
-After a successful run, the `outputDir` will contain:
+After a successful run, the `outputDir` contains one subfolder per executed job. Each analytic-job subfolder holds a single coalesced CSV (`part-*.csv`) plus an `rdf/` directory with the FAIR metadata:
 
-1. **`patient_profiles/`**: A folder containing the extracted data in CSV format (one row per patient, columns for every Observation and Survey Question).
-2. **`Catalog.ttl`**: RDF description of the Data Catalog.
-3. **`Dataset.ttl`**: RDF description of the Dataset, linked to the Catalog.
-4. **`Distribution.ttl`**: RDF description of the CSV file, linked to the Dataset.
-5. **`CSVW.ttl`**: W3C CSV-on-the-Web schema describing columns and data types.
-6. **`Vocabularies.ttl`**: SKOS concepts defining the questions and answer options found in the survey.
+| Subfolder | Produced by | Contents |
+| --- | --- | --- |
+| `observation_profiles/` | `--job observation` | Flat Observation CSV (`pid, code, display, value, date`) + `rdf/` |
+| `survey_profiles/`      | `--job survey`      | Flat QuestionnaireResponse CSV (`pid, code, display, answer, date`) + `rdf/` |
+| `patient_data/`         | `--job full`        | Unified flat CSV combining both (`pid, code, display, value, date`) + `rdf/` |
+| `bundle_extraction/`    | `--job bundle`      | A single FHIR transaction `bundle.json` mirroring the FHIR server contents — no Spark, no RDF |
+
+Inside every `rdf/` directory:
+
+1. **`Catalog.ttl`** - DCAT description of the Data Catalog.
+2. **`Dataset.ttl`** - DCAT Dataset, linked to the Catalog. Carries dynamic stats (record count, unique individuals, min/max age, temporal coverage) derived from the actual extracted data.
+3. **`Distribution.ttl`** - DCAT Distribution describing the produced CSV.
+4. **`CSVW.ttl`** - W3C CSV-on-the-Web schema describing the five columns. The `code` and `display` columns reference a SKOS concept scheme (`observation_codes` for Observation jobs, `question_codes` for Survey jobs). For Survey runs, additional per-question SKOS schemes record the answer-option value sets pulled from the Questionnaire definitions. All SKOS content lives in the same `CSVW.ttl` — there is no separate `Vocabularies.ttl`.
+
+The bundle job produces only `bundle.json` (no CSV, no RDF). Each entry has a `request.method` of `PUT` (when the resource carries an `id`) or `POST`, so the file can be POSTed to another FHIR server to recreate the dataset.

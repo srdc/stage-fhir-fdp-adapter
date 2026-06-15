@@ -20,7 +20,9 @@ case class AppConfig(
                       clientId: Option[String],
                       clientSecret: Option[String],
                       scope: Option[List[String]],
-                      token: Option[String]
+                      token: Option[String],
+                      dateFrom: Option[String] = None,
+                      dateTo: Option[String] = None
                     )
 
 object AppConfig {
@@ -29,8 +31,8 @@ object AppConfig {
     val authEnabled = conf.hasPath("auth.enabled") && conf.getBoolean("auth.enabled").booleanValue()
 
     AppConfig(
-      fhirServer = conf.getString("fhirServer"),
-      fhirVersion = conf.getString("fhirVersion"),
+      fhirServer = if (conf.hasPath("fhirServer")) conf.getString("fhirServer") else "",
+      fhirVersion = if (conf.hasPath("fhirVersion")) conf.getString("fhirVersion") else "",
       outputDir = conf.getString("outputDir"),
       jobType = conf.getString("jobType"),
       format = conf.getString("format"),
