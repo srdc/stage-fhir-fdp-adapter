@@ -80,14 +80,6 @@ Descriptive FAIR metadata (Catalog details, Publisher, Access Rights, etc.) is i
 * **`json`**: Automatically loads metadata from the configured `config.json` file.
 * **`excel`**: Automatically loads metadata from the configured `config.xlsx` file.
 
-### 2. Configure Run Mode
-
-The application supports different ways to load these configurations:
-
-* **`browser`** (Default): Loads a web form to fill in the config data in runtime..
-* **`json`**: Automatically loads a standard `config.json` from the classpath/working dir.
-* **`excel`**: Automatically loads a standard `config.xlsx` from the classpath/working dir.
-
 ---
 
 ## Usage
