@@ -1,32 +1,49 @@
 #!/usr/bin/env node
 /**
- * Usage: node generate-dict-kora.js --input VarDef_AGE1_20250121_V2.xlsx [--output kora_data_dictionary.xlsx]
+ * Usage: node generate-dict-kora.js --input VarDef_AGE1_20250121_V2.xlsx [--template src/main/resources/config_kora.xlsx] \[--output  kora_dictionary_integrated.xlsx] [--vocab-base http://stage-healthyageing.eu/fdp/vocab] [--lang en|de]
  * Requirement: Node.js
  */
 
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const { mergeIntoTemplate } = require('./excel-template-merge');
 
 function parseArgs() {
   const args = process.argv.slice(2);
-  const opts = { input: null, output: 'kora_data_dictionary.xlsx', lang: 'en' };
+  const opts = {
+    input: null,
+    output: 'kora_dictionary_integrated.xlsx',
+    template: 'src/main/resources/config_kora.xlsx',
+    vocabBase: 'http://stage-healthyageing.eu/fdp/vocab',
+    lang: 'en'
+  };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--input' && args[i + 1]) opts.input = args[++i];
     else if (args[i] === '--output' && args[i + 1]) opts.output = args[++i];
+    else if (args[i] === '--template' && args[i + 1]) opts.template = args[++i];
+    else if (args[i] === '--vocab-base' && args[i + 1]) opts.vocabBase = args[++i];
     else if ((args[i] === '--lang' || args[i] === '--language') && args[i + 1]) {
       const v = String(args[++i]).toLowerCase();
       opts.lang = (v === 'de' || v === 'ger' || v === 'deu' || v === 'german') ? 'de' : 'en';
     }
     else if (args[i] === '--help' || args[i] === '-h') {
-      console.log('Usage: node generate-dict-kora.js --input <xlsx> [--output <xlsx>] [--lang en|de]');
+      console.log(
+        'Usage: node generate-dict-kora.js --input <xlsx>\n' +
+        '  [--template <xlsx>] [--output <xlsx>] [--vocab-base <uri>] [--lang en|de]'
+      );
       process.exit(0);
     }
   }
   if (!opts.input) {
-    console.error('Error: --input is required.\nUsage: node generate-dict-kora.js --input <xlsx> [--output <xlsx>] [--lang en|de]');
+    console.error(
+      'Error: --input is required.\n' +
+      'Usage: node generate-dict-kora.js --input <xlsx>\n' +
+      '  [--template <xlsx>] [--output <xlsx>] [--vocab-base <uri>] [--lang en|de]'
+    );
     process.exit(1);
   }
+  opts.vocabBase = String(opts.vocabBase).replace(/\/+$/, '');
   return opts;
 }
 
@@ -178,175 +195,11 @@ function parseCodes(codeNoticeEng) {
   return codes.length >= 2 ? codes : [];
 }
 
-function escapeXml(str) {
-  return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-function buildXlsx(sheetsData) {
-  const sharedStrings = [];
-  const ssIndex = {};
-  function getSSIndex(str) {
-    const s = String(str || '');
-    if (ssIndex[s] !== undefined) return ssIndex[s];
-    const idx = sharedStrings.length;
-    sharedStrings.push(s);
-    ssIndex[s] = idx;
-    return idx;
-  }
-
-  for (const sheet of sheetsData) {
-    for (const row of sheet.rows) {
-      for (const cell of row) {
-        if (cell !== null && cell !== undefined) getSSIndex(cell);
-      }
-    }
-  }
-
-  const colLetter = (idx) => {
-    let s = '';
-    idx++;
-    while (idx > 0) { idx--; s = String.fromCharCode(65 + (idx % 26)) + s; idx = Math.floor(idx / 26); }
-    return s;
-  };
-
-  function buildSheetXml(rows) {
-    let xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
-    xml += '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>';
-    for (let r = 0; r < rows.length; r++) {
-      xml += `<row r="${r + 1}">`;
-      for (let c = 0; c < rows[r].length; c++) {
-        const val = rows[r][c];
-        if (val !== null && val !== undefined) {
-          xml += `<c r="${colLetter(c)}${r + 1}" t="s"><v>${getSSIndex(val)}</v></c>`;
-        }
-      }
-      xml += '</row>';
-    }
-    xml += '</sheetData></worksheet>';
-    return xml;
-  }
-
-  // Build sheet XMLs
-  const sheetXmls = sheetsData.map(s => buildSheetXml(s.rows));
-
-  let ssXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
-  ssXml += `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${sharedStrings.length}" uniqueCount="${sharedStrings.length}">`;
-  for (const s of sharedStrings) ssXml += `<si><t>${escapeXml(s)}</t></si>`;
-  ssXml += '</sst>';
-
-  let sheetsXml = '';
-  for (let i = 0; i < sheetsData.length; i++) {
-    sheetsXml += `<sheet name="${escapeXml(sheetsData[i].name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`;
-  }
-  const wbXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-<sheets>${sheetsXml}</sheets></workbook>`;
-
-  let wbRelsBody = '';
-  for (let i = 0; i < sheetsData.length; i++) {
-    wbRelsBody += `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`;
-  }
-  wbRelsBody += `<Relationship Id="rId${sheetsData.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>`;
-  wbRelsBody += `<Relationship Id="rId${sheetsData.length + 2}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>`;
-  const wbRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${wbRelsBody}</Relationships>`;
-
-  // [Content_Types].xml
-  let overrides = '';
-  overrides += '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>';
-  for (let i = 0; i < sheetsData.length; i++) {
-    overrides += `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`;
-  }
-  overrides += '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>';
-  overrides += '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>';
-  const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-<Default Extension="xml" ContentType="application/xml"/>${overrides}</Types>`;
-
-  const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
-</Relationships>`;
-
-  // Minimal styles.xml required by Apache POI
-  const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
-<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
-<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
-<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>
-</styleSheet>`;
-
-  const files = {
-    '[Content_Types].xml': Buffer.from(contentTypes, 'utf-8'),
-    '_rels/.rels': Buffer.from(rootRels, 'utf-8'),
-    'xl/workbook.xml': Buffer.from(wbXml, 'utf-8'),
-    'xl/_rels/workbook.xml.rels': Buffer.from(wbRels, 'utf-8'),
-    'xl/sharedStrings.xml': Buffer.from(ssXml, 'utf-8'),
-    'xl/styles.xml': Buffer.from(stylesXml, 'utf-8'),
-  };
-  for (let i = 0; i < sheetXmls.length; i++) {
-    files[`xl/worksheets/sheet${i + 1}.xml`] = Buffer.from(sheetXmls[i], 'utf-8');
-  }
-
-  return buildZip(files);
-}
-
-function buildZip(files) {
-  const entries = Object.entries(files);
-  const localHeaders = [];
-  const centralHeaders = [];
-  let offset = 0;
-  for (const [name, data] of entries) {
-    const nameBytes = Buffer.from(name, 'utf-8');
-    const compressed = zlib.deflateRawSync(data);
-    const useCompressed = compressed.length < data.length;
-    const storedData = useCompressed ? compressed : data;
-    const crc = crc32(data);
-    const lh = Buffer.alloc(30 + nameBytes.length);
-    lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(20, 4); lh.writeUInt16LE(0, 6);
-    lh.writeUInt16LE(useCompressed ? 8 : 0, 8); lh.writeUInt16LE(0, 10); lh.writeUInt16LE(0, 12);
-    lh.writeUInt32LE(crc, 14); lh.writeUInt32LE(storedData.length, 18);
-    lh.writeUInt32LE(data.length, 22); lh.writeUInt16LE(nameBytes.length, 26); lh.writeUInt16LE(0, 28);
-    nameBytes.copy(lh, 30);
-    localHeaders.push({ header: lh, data: storedData, offset });
-    const ch = Buffer.alloc(46 + nameBytes.length);
-    ch.writeUInt32LE(0x02014b50, 0); ch.writeUInt16LE(20, 4); ch.writeUInt16LE(20, 6); ch.writeUInt16LE(0, 8);
-    ch.writeUInt16LE(useCompressed ? 8 : 0, 10); ch.writeUInt16LE(0, 12); ch.writeUInt16LE(0, 14);
-    ch.writeUInt32LE(crc, 16); ch.writeUInt32LE(storedData.length, 20); ch.writeUInt32LE(data.length, 24);
-    ch.writeUInt16LE(nameBytes.length, 28); ch.writeUInt16LE(0, 30); ch.writeUInt16LE(0, 32);
-    ch.writeUInt16LE(0, 34); ch.writeUInt16LE(0, 36); ch.writeUInt32LE(0, 38); ch.writeUInt32LE(offset, 42);
-    nameBytes.copy(ch, 46);
-    centralHeaders.push(ch);
-    offset += lh.length + storedData.length;
-  }
-  const cdOffset = offset;
-  let cdSize = 0;
-  for (const ch of centralHeaders) cdSize += ch.length;
-  const eocd = Buffer.alloc(22);
-  eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(0, 4); eocd.writeUInt16LE(0, 6);
-  eocd.writeUInt16LE(entries.length, 8); eocd.writeUInt16LE(entries.length, 10);
-  eocd.writeUInt32LE(cdSize, 12); eocd.writeUInt32LE(cdOffset, 16); eocd.writeUInt16LE(0, 20);
-  const parts = [];
-  for (const lh of localHeaders) { parts.push(lh.header); parts.push(lh.data); }
-  for (const ch of centralHeaders) parts.push(ch);
-  parts.push(eocd);
-  return Buffer.concat(parts);
-}
-
-function crc32(buf) {
-  let crc = 0xFFFFFFFF;
-  for (let i = 0; i < buf.length; i++) { crc ^= buf[i]; for (let j = 0; j < 8; j++) crc = (crc >>> 1) ^ (crc & 1 ? 0xEDB88320 : 0); }
-  return (crc ^ 0xFFFFFFFF) >>> 0;
-}
-
 function main() {
   const opts = parseArgs();
 
   console.log('='.repeat(60));
-  console.log('KORA-AGE1 → Data Dictionary + Value Sets Generator');
+  console.log('KORA-AGE1 → Data Dictionary + ValueSet Generator');
   console.log('='.repeat(60));
 
   console.log(`\nLanguage: ${opts.lang === 'de' ? 'German (Group GER / Content GER / Code-Notice GER)' : 'English (Group ENG / Content ENG / Code-Notice ENG)'}`);
@@ -364,8 +217,7 @@ function main() {
   const sheetXml = entries[sheetFile].toString('utf-8');
   const allRows = parseSheet(sheetXml, sharedStrings);
 
-  // TODO: Change if needed
-  const PROPERTY_URL_BASE = 'http://example.org/vocab';
+  const PROPERTY_URL_BASE = opts.vocabBase;
 
   // Language-aware cell indices. KORA_W_Phenotypes pairs GER/ENG cells; pick the right side per --lang.
   const isGerman = opts.lang === 'de';
@@ -453,17 +305,22 @@ function main() {
   console.log(`  Variables with structured codes: ${codedCount}`);
   console.log(`  Total value set entries: ${valueSetRows.length - 1}`);
 
-  console.log(`\nWriting: ${opts.output}`);
-  const xlsxBuf = buildXlsx([
-    { name: 'Data Dictionary', rows: dictRows },
-    { name: 'Value Sets', rows: valueSetRows }
-  ]);
-  fs.writeFileSync(path.resolve(opts.output), xlsxBuf);
+  console.log(`\nMerging into template: ${opts.template}`);
+  console.log(`Writing: ${opts.output}`);
+  mergeIntoTemplate(
+    path.resolve(opts.template),
+    [
+      { name: 'Data Dictionary', rows: dictRows },
+      { name: 'ValueSet', rows: valueSetRows }
+    ],
+    path.resolve(opts.output)
+  );
 
   const sizeKB = (fs.statSync(path.resolve(opts.output)).size / 1024).toFixed(1);
   console.log(`  File size: ${sizeKB} KB`);
   console.log(`  Data Dictionary rows: ${dictRows.length - 1} (+ header)`);
-  console.log(`  Value Sets rows: ${valueSetRows.length - 1} (+ header)`);
+  console.log(`  ValueSet rows: ${valueSetRows.length - 1} (+ header)`);
+  console.log(`  Vocab base: ${opts.vocabBase}`);
   console.log('\n' + '='.repeat(60));
   console.log('Done.');
 }
