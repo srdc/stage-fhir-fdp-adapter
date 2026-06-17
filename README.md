@@ -156,26 +156,6 @@ The `--date-from` / `--date-to` / `--reference` / `--window` flags apply here as
 
 The bundle job produces neither CSV nor RDF — its only output is `bundle.json`.
 
----
-
-## Generating cohort dictionary excel files
-
-For cohorts whose dictionary lives outside FHIR (KORA, NFBC), two Node scripts at the project root turn the cohort's source into a single self-contained Excel file that the extraction app can consume directly.
-
-```bash
-# KORA-AGE1
-node generate-dict-kora.js --input VarDef_AGE1_20250121_V2.xlsx --template src/main/resources/config.xlsx --output  kora_dictionary_integrated.xlsx --vocab-base http://stage-healthyageing.eu/fdp/vocab
-
-# NFBC1966
-node generate-dict-nfbc.js --input NFBC196660vKerys_DataDictionary_2026-02-12.csv --template src/main/resources/config.xlsx --output  nfbc_dictionary_integrated.xlsx --vocab-base http://stage-healthyageing.eu/fdp/vocab
-```
-
-Notes:
-- The `--vocab-base` value is written into the `Property URL (ontology)` column of every coded variable, so it must match the `--vocab-base` passed to the extraction app, otherwise the CSVW `propertyUrl` values and the SKOS scheme URIs will be different.
-- `--template` defaults to `src/main/resources/config_<cohort>.xlsx`; `--output` defaults to `<cohort>_dictionary_integrated.xlsx` in the current directory.
-
----
-
 ## Output
 
 After a successful run, the `outputDir` contains one subfolder per executed job. Each analytic-job subfolder holds a single coalesced CSV (`part-*.csv`) plus an `rdf/` directory with the FAIR metadata:
