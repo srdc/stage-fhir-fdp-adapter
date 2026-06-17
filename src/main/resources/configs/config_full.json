@@ -1,0 +1,176 @@
+{
+  "catalog": {
+    "existing": false,
+    "uri": null,
+    "title": "SRDC STAGE FHIR Data Catalog",
+    "description": "FAIRful metadata catalog for FHIR-based health datasets extracted by SRDC within the scope of STAGE",
+    "applicableLegislation": "https://eur-lex.europa.eu/eli/reg/2025/327/oj",
+    "geographicalCoverage": [
+      "http://publications.europa.eu/resource/authority/country/TUR"
+    ],
+    "temporalCoverage": {
+      "start": "2010-01-01",
+      "end": "2026-01-01"
+    },
+    "themes": "http://publications.europa.eu/resource/authority/data-theme/HEAL",
+    "creator": {
+      "name": "SRDC Software Research & Development and Consultancy Corp."
+    },
+    "licence": "http://creativecommons.org/licenses/by/4.0/",
+    "homepage": "https://www.srdc.com.tr/en/",
+    "language": [
+      "http://publications.europa.eu/resource/authority/language/ENG"
+    ],
+    "modificationDate": "2025-10-10",
+    "publisher": {
+      "name": "SRDC Software Research & Development and Consultancy Corp.",
+      "contactPoint": {
+        "page": "https://www.srdc.com.tr/contact/",
+        "email": "info@srdc.com.tr"
+      },
+      "note": "The catalog is maintained and published by SRDC",
+      "trusted": true
+    },
+    "releaseDate": "2026-01-01",
+    "rights": "This catalog provides descriptive metadata only. Reuse of metadata is permitted with attribution. Access to and reuse of the referenced health datasets may require authorization and is governed by applicable health data protection, ethical approval, and national legislation."
+  },
+  "jobs": {
+    "full": {
+      "dataset": {
+        "title": "SRDC STAGE FHIR Combined Patient Dataset",
+        "description": "Unified FHIR-based health dataset combining clinical observations and questionnaire responses into a single flat patient view, extracted from FHIR Observation and QuestionnaireResponse resources by SRDC.",
+        "identifier": "https://www.srdc.com.tr/stage/fhir-full-dataset",
+        "version": "1.0.0",
+        "populationCoverage": "Adult (25-44 years), Middle-aged (45-64 years), Elderly (65+ years)",
+        "theme": "http://publications.europa.eu/resource/authority/data-theme/HEAL",
+        "provenance": "Observation and QuestionnaireResponse data extracted from FHIR resources and unified into a single long-format patient table using SRDC's FHIR extraction tools.",
+        "contactPoint": {
+          "page": "https://www.srdc.com.tr/contact/",
+          "email": "info@srdc.com.tr"
+        },
+        "hdab": {
+          "name": "SRDC Software Research & Development and Consultancy Corp.",
+          "type": "http://publications.europa.eu/resource/authority/corporate-body/EUI",
+          "contactPoint": {
+            "page": "https://www.srdc.com.tr/contact/",
+            "email": "info@srdc.com.tr"
+          }
+        },
+        "publisher": {
+          "name": "SRDC Software Research & Development and Consultancy Corp.",
+          "type": "http://publications.europa.eu/resource/authority/corporate-body/EUI",
+          "contactPoint": {
+            "page": "https://www.srdc.com.tr/contact/",
+            "email": "info@srdc.com.tr"
+          },
+          "note": "The publisher provides this dataset metadata without warranties of any kind.",
+          "trusted": true
+        },
+        "keyword": ["fhir", "health data", "clinical observations", "questionnaire responses", "combined", "interoperability", "srdc"],
+        "spatial": ["http://publications.europa.eu/resource/authority/country/TUR"],
+        "healthCategory": "http://13.81.34.152:1101/resource/authority/healthcategories/EHRS",
+        "datasetType": "http://publications.europa.eu/resource/authority/dataset-type/RELEASE",
+        "applicableLegislation": "https://eur-lex.europa.eu/eli/reg/2025/327/oj",
+        "accessRights": "http://publications.europa.eu/resource/authority/access-right/PUBLIC",
+        "healthTheme": "http://13.81.34.152:1101/resource/authority/health-theme/LIFECOURSE_HEALTH",
+        "frequency": "http://publications.europa.eu/resource/authority/frequency/BIMONTHLY",
+        "numRecords": 4000,
+        "maxAge": 20,
+        "minAge": 80,
+        "numUniqueIndividual": 200,
+        "temporalCoverage": {
+          "start": "2010-01-01",
+          "end": "2026-01-01"
+        },
+        "qualityAnnotation": "Data validated against STAGE quality assurance protocols and FHIR conformance requirements.",
+        "conformsTo": "https://www.wikidata.org/entity/Q19597236",
+        "creator": {
+          "name": "SRDC Software Research & Development and Consultancy Corp.",
+          "email": "info@srdc.com.tr"
+        },
+        "documentation": "https://www.srdc.com.tr/ehealth/",
+        "alternative": "SRDC STAGE FHIR Combined Patient Data Repository",
+        "codeValues": [
+          {
+            "scheme": "http://www.wikidata.org/entity/Q45127",
+            "notation": "Y59.0",
+            "label": "Viral Vaccines"
+          },
+          {
+            "scheme": "https://www.wikidata.org/wiki/Q502480",
+            "notation": "8462-4",
+            "label": "Diastolic Blood Pressure"
+          }
+        ],
+        "codingSystem": [
+          "http://www.wikidata.org/entity/Q45127",
+          "https://www.wikidata.org/wiki/Q502480"
+        ],
+        "retentionPeriod": {
+          "start": "2020-01-01",
+          "end": "2030-01-01"
+        },
+        "personalData": [
+          "https://w3id.org/dpv/pd#Gender",
+          "https://w3id.org/dpv/pd#Age",
+          "https://w3id.org/dpv/pd#BirthDate"
+        ],
+        "landingPage": "https://www.srdc.com.tr/en/",
+        "language": "http://publications.europa.eu/resource/authority/language/ENG",
+        "modificationDate": "2025-10-01",
+        "releaseDate": "2025-01-01",
+        "otherIdentifier": [],
+        "qualifiedAttribution": [
+          {
+            "name": "SRDC Software Research & Development and Consultancy Corp.",
+            "role": "sponsor"
+          }
+        ],
+        "spatialResolution": null,
+        "temporalResolution": "P1Y",
+        "versionNotes": null,
+        "wasGeneratedBy": [
+          "http://13.81.34.152:1101/resource/authority/health-activity/EHEALTH_APPLICATION",
+          "http://13.81.34.152:1101/resource/authority/health-activity/OBSERVATIONAL_DATA",
+          "http://13.81.34.152:1101/resource/authority/health-activity/SURVEILLANCE"
+        ],
+        "purpose": "The data are processed to support clinical research, FHIR-based interoperability, and population-level health analysis.",
+        "legalBasis": null,
+        "sample": {
+          "accessURL": "https://www.srdc.com.tr/stage/fhir-full-dataset/sample.csv",
+          "applicableLegislation": "http://eur-lex.europa.eu/eli/reg/2025/327/oj",
+          "title": "SRDC STAGE FHIR Combined Samples",
+          "format": "http://publications.europa.eu/resource/authority/file-type/CSV"
+        },
+        "analytics": {
+          "accessURL": "https://www.srdc.com.tr/stage/fhir-full-dataset/analytics.pdf",
+          "applicableLegislation": "http://eur-lex.europa.eu/eli/reg/2025/327/oj",
+          "title": "SRDC STAGE FHIR Combined Dataset Analytics",
+          "format": "http://publications.europa.eu/resource/authority/file-type/PDF"
+        }
+      },
+      "distribution": {
+        "accessURL": "https://www.srdc.com.tr/stage/fhir-full-dataset/distribution",
+        "applicableLegislation": "https://eur-lex.europa.eu/eli/reg/2025/327/oj",
+        "format": "http://publications.europa.eu/resource/authority/file-type/CSV",
+        "title": "SRDC STAGE FHIR Combined Distribution",
+        "description": "Unified flat distribution combining Observation and Survey data into a single per-reading CSV.",
+        "license": "http://creativecommons.org/licenses/by/4.0/",
+        "availability": "http://publications.europa.eu/resource/authority/planned-availability/EXPERIMENTAL",
+        "byteSize": 1000000,
+        "checksum": {
+          "algorithm": "https://spdx.org/rdf/terms#checksumAlgorithm_md5",
+          "value": "b931c1fdf1e64022d63859a66cb8f697"
+        },
+        "mediaType": "https://www.iana.org/assignments/media-types/text/csv",
+        "packagingFormat": "http://publications.europa.eu/resource/authority/file-type/ZIP",
+        "releaseDate": "2025-01-01",
+        "rights": "Reuse of the data is permitted with attribution.",
+        "spatialResolution": 5000.0,
+        "status": "http://publications.europa.eu/resource/authority/distribution-status/COMPLETED",
+        "temporalResolution": "P1Y",
+        "accessService": null
+      }
+    }
+  }
+}
