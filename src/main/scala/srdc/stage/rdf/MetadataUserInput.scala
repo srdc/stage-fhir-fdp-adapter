@@ -773,7 +773,7 @@ object MetadataUserInput {
         }).toList)
       else None,
       dataDictionaryValueSets = {
-        val valueSetsSheet = resolveSheet("Value Sets")
+        val valueSetsSheet = resolveSheet("ValueSet")
         if (valueSetsSheet == null) Map.empty[String, Map[String, String]]
         else {
           val builder = mutable.LinkedHashMap.empty[String, mutable.LinkedHashMap[String, String]]
