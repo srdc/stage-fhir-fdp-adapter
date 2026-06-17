@@ -149,7 +149,8 @@ abstract class BaseExtraction {
       globalStats = globalStats,
       runMode = cfg.runMode,
       sharedCatalogUri = catalogUri,
-      isFhirConfigured = true
+      isFhirConfigured = true,
+      vocabBase = cfg.vocabBase
     )
   }
 
@@ -173,7 +174,8 @@ abstract class BaseExtraction {
       globalStats = emptyStats,
       runMode = cfg.runMode,
       sharedCatalogUri = catalogUri,
-      isFhirConfigured = false
+      isFhirConfigured = false,
+      vocabBase = cfg.vocabBase
     )
   }
 }

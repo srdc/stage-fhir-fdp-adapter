@@ -22,7 +22,8 @@ case class AppConfig(
                       scope: Option[List[String]],
                       token: Option[String],
                       dateFrom: Option[String] = None,
-                      dateTo: Option[String] = None
+                      dateTo: Option[String] = None,
+                      vocabBase: String = "http://stage-healthyageing.eu/fdp/vocab"
                     )
 
 object AppConfig {

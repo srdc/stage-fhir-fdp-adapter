@@ -77,7 +77,7 @@ object MetadataWriter {
 
   private val logger = LoggerFactory.getLogger(getClass)
 
-  private val VOCAB_BASE = "http://example.org/vocab"
+  private val DEFAULT_VOCAB_BASE = "http://stage-healthyageing.eu/fdp/vocab"
   private val ELI_NS = "http://data.europa.eu/eli/ontology#"
   private val DQV_NS = "http://www.w3.org/ns/dqv#"
 
@@ -156,7 +156,7 @@ object MetadataWriter {
    * @param sharedCatalogUri An optional URI to reuse an existing Catalog across multiple jobs.
    * @return The URI of the Catalog used or created.
    */
-  def exportResults(outputDir: String, fdpUrl: String, fdpEmail: String, fdpPassword: String, meta: MetadataUserInput, jobStats: DatasetStats, globalStats: DatasetStats, runMode: String, sharedCatalogUri: Option[String] = None, isFhirConfigured: Boolean = true): String = {
+  def exportResults(outputDir: String, fdpUrl: String, fdpEmail: String, fdpPassword: String, meta: MetadataUserInput, jobStats: DatasetStats, globalStats: DatasetStats, runMode: String, sharedCatalogUri: Option[String] = None, isFhirConfigured: Boolean = true, vocabBase: String = DEFAULT_VOCAB_BASE): String = {
     logger.info("Starting Metadata Export...")
 
     val isFdpMode = fdpUrl.trim.nonEmpty && fdpEmail.trim.nonEmpty
@@ -222,9 +222,9 @@ object MetadataWriter {
     // 4. CSVW
     val initialCsvwUri = if (isFdpMode) "" else s"urn:uuid:${UUID.randomUUID()}"
     val csvwModel = if (isFhirConfigured) {
-      val model = createCsvwModel(jobStats, initialCsvwUri, finalDistUri)
+      val model = createCsvwModel(jobStats, initialCsvwUri, finalDistUri, vocabBase)
       if (jobStats.vocabularies.nonEmpty) {
-        model.add(createConceptSchemes(jobStats))
+        model.add(createConceptSchemes(jobStats, vocabBase))
       }
       model
     } else {
@@ -236,7 +236,8 @@ object MetadataWriter {
         fields = fields,
         vocabularies = meta.dataDictionaryValueSets,
         subjectUri = initialCsvwUri,
-        parentDistributionUri = finalDistUri
+        parentDistributionUri = finalDistUri,
+        vocabBase = vocabBase
       )
     }
 
@@ -585,9 +586,10 @@ object MetadataWriter {
    * @param stats      DatasetStats containing the column definitions extracted from the dataframe.
    * @param subjectUri The URI assigned to the CSVW Resource by the FDP server.
    * @param parentUri  The URI of the parent Distribution (for dct:isPartOf linking).
+   * @param vocabBase  Base URI for csvw:propertyUrl values.
    * @return A populated Jena Model representing the CSVW schema.
    */
-  private def createCsvwModel(stats: DatasetStats, subjectUri: String, parentUri: String): Model = {
+  private def createCsvwModel(stats: DatasetStats, subjectUri: String, parentUri: String, vocabBase: String): Model = {
     val m = createModel()
 
     val tableGroup = createSubject(m, subjectUri)
@@ -620,7 +622,7 @@ object MetadataWriter {
         val shortId = stats.columnToVocabId(colName)
         if (stats.vocabularies.contains(shortId)) {
           val propertyUrlPredicate = m.createProperty("http://www.w3.org/ns/csvw#propertyUrl")
-          col.addProperty(propertyUrlPredicate, m.createResource(s"$VOCAB_BASE/$shortId"))
+          col.addProperty(propertyUrlPredicate, m.createResource(s"$vocabBase/$shortId"))
         }
       }
 
@@ -642,12 +644,13 @@ object MetadataWriter {
    * This maps raw codes (from FHIR Questionnaires) to human-readable display labels.
    *
    * @param stats DatasetStats containing the extracted vocabularies map.
+   * @param vocabBase Base URI for the emitted SKOS scheme URIs.
    * @return A populated Jena Model containing SKOS Concept Schemes.
    */
-  private def createConceptSchemes(stats: DatasetStats): Model = {
+  private def createConceptSchemes(stats: DatasetStats, vocabBase: String): Model = {
     val m = createModel()
     stats.vocabularies.foreach { case (colName, options) =>
-      val schemeUri = s"$VOCAB_BASE/$colName"
+      val schemeUri = s"$vocabBase/$colName"
       val scheme = m.createResource(schemeUri).addProperty(RDF.`type`, SKOS.ConceptScheme).addProperty(DCTerms.title, s"Vocabulary for $colName")
       options.foreach { case (code, display) =>
         val concept = m.createResource(s"$schemeUri/$code")
@@ -669,9 +672,10 @@ object MetadataWriter {
    * Used by the "dictionary" job to produce a Dictionary.ttl without requiring any FHIR extraction or Dataset/Distribution context.
    * @param fields The list of CsvwField entries parsed from the Data Dictionary Excel sheet.
    * @param vocabularies Map of variable name to its code -> display pairs from Value Sets sheet.
+   * @param vocabBase Base URI used for emitted SKOS scheme + concept URIs.
    * @return A populated Jena Model representing the dictionary as a CSVW schema with SKOS vocabularies.
    */
-  def createDictionaryModel(fields: List[CsvwField], vocabularies: Map[String, Map[String, String]] = Map.empty, subjectUri: String = "", parentDistributionUri: String = ""): Model = {
+  def createDictionaryModel(fields: List[CsvwField], vocabularies: Map[String, Map[String, String]] = Map.empty, subjectUri: String = "", parentDistributionUri: String = "", vocabBase: String = DEFAULT_VOCAB_BASE): Model = {
     val m = createModel()
     val qudtUnit = m.createProperty("http://qudt.org/schema/qudt/unit")
 
@@ -703,19 +707,19 @@ object MetadataWriter {
 
     tableGroup.addProperty(CSVW.table, table)
 
-    val studyScheme = m.createResource(s"$VOCAB_BASE/study")
+    val studyScheme = m.createResource(s"$vocabBase/study")
       .addProperty(RDF.`type`, SKOS.ConceptScheme)
       .addProperty(DCTerms.title, m.createLiteral("Studies / Cohorts", "en"))
 
-    val sectionScheme = m.createResource(s"$VOCAB_BASE/section")
+    val sectionScheme = m.createResource(s"$vocabBase/section")
       .addProperty(RDF.`type`, SKOS.ConceptScheme)
       .addProperty(DCTerms.title, m.createLiteral("Variable groups / sections", "en"))
 
-    val parentGroupScheme = m.createResource(s"$VOCAB_BASE/parent-group")
+    val parentGroupScheme = m.createResource(s"$vocabBase/parent-group")
       .addProperty(RDF.`type`, SKOS.ConceptScheme)
       .addProperty(DCTerms.title, m.createLiteral("Parent groups (coarser groupings above Section)", "en"))
 
-    val selectionScheme = m.createResource(s"$VOCAB_BASE/selection")
+    val selectionScheme = m.createResource(s"$vocabBase/selection")
       .addProperty(RDF.`type`, SKOS.ConceptScheme)
       .addProperty(DCTerms.title, m.createLiteral("Variable selection / inclusion status", "en"))
 
@@ -731,7 +735,7 @@ object MetadataWriter {
       f.unit.filter(_.nonEmpty).foreach(u => col.addProperty(qudtUnit, u))
 
       f.study.filter(_.nonEmpty).foreach { s =>
-        val concept = m.createResource(s"$VOCAB_BASE/study/${slug(s)}")
+        val concept = m.createResource(s"$vocabBase/study/${slug(s)}")
           .addProperty(RDF.`type`, SKOS.Concept)
           .addProperty(SKOS.inScheme, studyScheme)
           .addProperty(SKOS.prefLabel, m.createLiteral(s, "en"))
@@ -740,7 +744,7 @@ object MetadataWriter {
       }
 
       f.group.filter(_.nonEmpty).foreach { g =>
-        val concept = m.createResource(s"$VOCAB_BASE/section/${slug(g)}")
+        val concept = m.createResource(s"$vocabBase/section/${slug(g)}")
           .addProperty(RDF.`type`, SKOS.Concept)
           .addProperty(SKOS.inScheme, sectionScheme)
           .addProperty(SKOS.prefLabel, m.createLiteral(g, "en"))
@@ -774,7 +778,7 @@ object MetadataWriter {
 
       // Selection -> SKOS Concept
       f.selection.filter(_.nonEmpty).foreach { s =>
-        val concept = m.createResource(s"$VOCAB_BASE/selection/${slug(s)}")
+        val concept = m.createResource(s"$vocabBase/selection/${slug(s)}")
           .addProperty(RDF.`type`, SKOS.Concept)
           .addProperty(SKOS.inScheme, selectionScheme)
           .addProperty(SKOS.prefLabel, m.createLiteral(s, "en"))
@@ -784,7 +788,7 @@ object MetadataWriter {
 
       // Parent Group -> skos:broader
       f.parentGroup.filter(_.nonEmpty).foreach { pg =>
-        val concept = m.createResource(s"$VOCAB_BASE/parent-group/${slug(pg)}")
+        val concept = m.createResource(s"$vocabBase/parent-group/${slug(pg)}")
           .addProperty(RDF.`type`, SKOS.Concept)
           .addProperty(SKOS.inScheme, parentGroupScheme)
           .addProperty(SKOS.prefLabel, m.createLiteral(pg, "en"))
@@ -841,7 +845,7 @@ object MetadataWriter {
 
     // Embed SKOS ConceptSchemes for variables with value sets (same pattern as createConceptSchemes)
     vocabularies.foreach { case (varName, options) =>
-      val schemeUri = s"$VOCAB_BASE/$varName"
+      val schemeUri = s"$vocabBase/$varName"
       val scheme = m.createResource(schemeUri)
         .addProperty(RDF.`type`, SKOS.ConceptScheme)
         .addProperty(DCTerms.title, s"Vocabulary for $varName")

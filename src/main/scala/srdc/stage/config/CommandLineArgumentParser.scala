@@ -108,7 +108,12 @@ object CommandLineArgumentParser {
         opt[String]("window")
           .action { (x, c) => dateInputs("window") = Some(x.trim); c }
           .text("Half-width around --reference, as an ISO-8601 duration (e.g. P30D, P6M, P1Y). " +
-            "Resolved into [reference - window, reference + window].")
+            "Resolved into [reference - window, reference + window]."),
+
+        opt[String]("vocab-base")
+          .action((x, c) => c.copy(vocabBase = x.trim.replaceAll("/+$", "")))
+          .text("Base URI for SKOS schemes and CSVW propertyUrl values. " +
+            "Default: http://stage-healthyageing.eu/fdp/vocab")
       )
     }
 
