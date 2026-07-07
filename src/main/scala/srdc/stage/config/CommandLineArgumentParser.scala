@@ -53,7 +53,9 @@ object CommandLineArgumentParser {
         // Job Control
         opt[String]('j', "job")
           .action((x, c) => c.copy(jobType = x))
-          .text("Job type to run: 'survey' (Healthy Aging) or 'enrich'"),
+          .text("Job type(s) to run, comma-separated: 'survey', 'observation', 'full'. " +
+            "Optional when no FHIR server is configured (pass --job \"\" to override the " +
+            "application.conf default): jobs then only select job-suffixed workbook sheets."),
 
         opt[String]('f', "format")
           .action((x, c) => c.copy(format = x))

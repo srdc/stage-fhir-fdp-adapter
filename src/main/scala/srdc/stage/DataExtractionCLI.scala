@@ -60,6 +60,12 @@ object DataExtractionCLI {
       System.exit(0)
     }
 
+    if (sparkJobs.forall(_.trim.isEmpty)) {
+      logger.error("A FHIR server is configured but no job type was given. " +
+        "Pass --job (or set jobType in application.conf) with one or more of: survey, observation, full, bundle.")
+      System.exit(1)
+    }
+
     implicit val spark: SparkSession = SparkSession.builder()
       .appName(s"healthy-aging-${config.jobType.replace(",", "-")}")
       .master("local[*]")
@@ -150,24 +156,31 @@ object DataExtractionCLI {
   private def runJobsWithoutFhir(config: AppConfig, jobs: Array[String]): Unit = {
     logger.info("No FHIR server configured - running metadata-only pipeline (CSVW will be built from the Excel Data Dictionary).")
 
+    // Without a FHIR server no extraction module ever runs: the job name only
+    val namedJobs = jobs.map(_.trim).filter(_.nonEmpty)
+    val effectiveJobs = if (namedJobs.isEmpty) Array("") else namedJobs
+
     var sharedCatalog: Option[CatalogMetadataUserInput] = None
     var currentCatalogUri: Option[String] = None
 
-    jobs.foreach { jobName =>
-      logger.info(s"--- Finalizing and Validating Module (no-FHIR): $jobName ---")
+    effectiveJobs.foreach { jobName =>
+      val jobLabel = if (jobName.isEmpty) "metadata" else jobName
+      logger.info(s"--- Finalizing and Validating Module (no-FHIR): $jobLabel ---")
       val jobMetadata = MetadataUserInput.load(config, jobName, sharedCatalog)
       if (sharedCatalog.isEmpty) sharedCatalog = Some(jobMetadata.catalog)
 
       val jobObject: BaseExtraction = jobName match {
         case "survey"      => SurveyExtraction
         case "observation" => ObservationExtraction
-        case "full"        => FullExtraction
+        // "" = generic metadata-only pass; all modules behave identically
+        // without FHIR (exportResultsNoFhir is shared), so any object works.
+        case "full" | ""   => FullExtraction
         case unknown =>
           logger.warn(s"Unknown module skipped: $unknown")
           null
       }
       if (jobObject != null) {
-        val catalogUri = jobObject.exportResultsNoFhir(config, jobMetadata, jobName, currentCatalogUri)
+        val catalogUri = jobObject.exportResultsNoFhir(config, jobMetadata, jobLabel, currentCatalogUri)
         currentCatalogUri = Some(catalogUri)
       }
     }
