@@ -78,6 +78,27 @@ object MetadataWriter {
   private val logger = LoggerFactory.getLogger(getClass)
 
   private val DEFAULT_VOCAB_BASE = "http://stage-healthyageing.eu/fdp/vocab"
+
+  private val FREQUENCY_AUTHORITY_NS = "http://publications.europa.eu/resource/authority/frequency/"
+
+  /** ISO-8601 duration with at least one designator in the date or time part. */
+  private val ISO_DURATION_PATTERN = "^P(?!$)(\\d+Y)?(\\d+M)?(\\d+W)?(\\d+D)?(T(?!$)(\\d+H)?(\\d+M)?(\\d+S)?)?$"
+
+  /** Common repetition periods mapped to EU Publications Office frequency authority codes. */
+  private val DURATION_TO_EU_FREQUENCY = Map(
+    "P1D" -> "DAILY",
+    "P1W" -> "WEEKLY", "P7D" -> "WEEKLY",
+    "P2W" -> "BIWEEKLY", "P14D" -> "BIWEEKLY",
+    "P1M" -> "MONTHLY",
+    "P2M" -> "BIMONTHLY",
+    "P3M" -> "QUARTERLY",
+    "P6M" -> "ANNUAL_2",
+    "P1Y" -> "ANNUAL", "P12M" -> "ANNUAL",
+    "P2Y" -> "BIENNIAL",
+    "P3Y" -> "TRIENNIAL",
+    "P5Y" -> "QUINQUENNIAL",
+    "P10Y" -> "DECENNIAL"
+  )
   private val ELI_NS = "http://data.europa.eu/eli/ontology#"
   private val DQV_NS = "http://www.w3.org/ns/dqv#"
 
@@ -733,6 +754,19 @@ object MetadataWriter {
       f.description.foreach(d => col.addProperty(DCTerms.description, m.createLiteral(d, "en")))
       f.propertyUrl.filter(_.nonEmpty).foreach(p => col.addProperty(CSVW.propertyURL, m.createResource(p)))
       f.unit.filter(_.nonEmpty).foreach(u => col.addProperty(qudtUnit, u))
+
+      // Repetition Period -> dcat:temporalResolution
+      f.repetitionPeriod.map(_.trim.toUpperCase).filter(_.nonEmpty).foreach { period =>
+        if (period.matches(ISO_DURATION_PATTERN)) {
+          col.addProperty(DCAT.temporalResolution, m.createTypedLiteral(period, XSDDatatype.XSDduration))
+          DURATION_TO_EU_FREQUENCY.get(period).foreach { code =>
+            col.addProperty(DCTerms.accrualPeriodicity,
+              m.createResource(FREQUENCY_AUTHORITY_NS + code).addProperty(RDF.`type`, DCTerms.Frequency))
+          }
+        } else {
+          logger.warn("Invalid Repetition Period '{}' for variable '{}'; expected an ISO-8601 duration such as P6M or P1Y. Skipping.", period, f.name)
+        }
+      }
 
       f.study.filter(_.nonEmpty).foreach { s =>
         val concept = m.createResource(s"$vocabBase/study/${slug(s)}")

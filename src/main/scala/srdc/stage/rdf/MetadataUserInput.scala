@@ -135,7 +135,8 @@ case class CsvwField(
                       minValue: Option[String] = None,
                       maxValue: Option[String] = None,
                       required: Option[String] = None,
-                      conditionalOn: Option[String] = None
+                      conditionalOn: Option[String] = None,
+                      repetitionPeriod: Option[String] = None
                     )
 
 case class MetadataUserInput(
@@ -767,7 +768,10 @@ object MetadataUserInput {
               minValue = toStringOption(r.getCell(16).getStringCellValue),
               maxValue = toStringOption(r.getCell(17).getStringCellValue),
               required = toStringOption(r.getCell(18).getStringCellValue),
-              conditionalOn = toStringOption(r.getCell(19).getStringCellValue)
+              conditionalOn = toStringOption(r.getCell(19).getStringCellValue),
+              // Optional column 21: ISO-8601 duration for variables re-recorded at a
+              // fixed interval (e.g. P6M). Absent cells resolve to blank (backward compatible).
+              repetitionPeriod = toStringOption(r.getCell(20).getStringCellValue)
             ))
           }
         }).toList)
