@@ -26,8 +26,87 @@
 {{job-banner}}
 <form method="post" action="/form">
 
+    <div id="organizations-section" {{organizations-section-style}}>
+    <h2>Organizations</h2>
+    <p class="info">Describe each organisation once here, then reference it from the Catalog and Dataset
+        sections below. This is the only place agent details are entered; each organisation is emitted
+        as a single shared entity per RDF layer.</p>
+    <div id="org-rows"></div>
+    <div class="field">
+        <button type="button" onclick="addOrganization()">+ Add organization</button>
+    </div>
+    </div><!-- end organizations-section -->
+
+    <!-- Row template. Kept in a <template> so the server-substituted type options are available to JS. -->
+    <template id="org-row-template">
+        <div class="field org-row">
+            <label>Organization <span class="org-index"></span>
+                <span class="desc">The ID is what you reference below.</span>
+            </label>
+            <div class="field">
+                <label>Organization ID<i style="color: red">*</i></label>
+                <input name="org.__I__.id" class="org-id" oninput="refreshOrgSelects()" placeholder="OULU">
+            </div>
+            <div class="field">
+                <label>Name<i style="color: red">*</i></label>
+                <input name="org.__I__.name" class="org-name" oninput="refreshOrgSelects()" placeholder="University of Oulu">
+            </div>
+            <div class="field">
+                <label>Canonical IRI
+                    <span class="desc">ROR / Wikidata / homepage. Left empty, an IRI is minted from the vocabulary base.</span>
+                </label>
+                <input type="url" name="org.__I__.iri" placeholder="https://ror.org/...">
+            </div>
+            <div class="field">
+                <label>Type</label>
+                <select name="org.__I__.type">
+                    <option value="" selected>Select a type</option>
+                    {{hdabTypeOptions}}
+                </select>
+            </div>
+            <div class="field">
+                <label>Contact Point<span class="desc">At least one of page or email.</span></label>
+                <div class="field">
+                    <label>Page</label>
+                    <input type="url" name="org.__I__.page" placeholder="https://oulu.fi">
+                </div>
+                <div class="field">
+                    <label>Email</label>
+                    <input type="email" name="org.__I__.email" placeholder="info@oulu.fi">
+                </div>
+            </div>
+            <div class="field">
+                <label>Homepage</label>
+                <input type="url" name="org.__I__.homepage" placeholder="https://www.oulu.fi">
+            </div>
+            <div class="field">
+                <label>Description</label>
+                <textarea name="org.__I__.note"></textarea>
+            </div>
+            <div class="field">
+                <label>Trusted data holder</label>
+                <input type="checkbox" name="org.__I__.trusted">
+            </div>
+            <div class="field">
+                <label>Other identifiers<span class="desc">Comma-separated.</span></label>
+                <input name="org.__I__.identifiers">
+            </div>
+            <div class="field">
+                <button type="button" onclick="removeOrganization(this)">Remove</button>
+            </div>
+        </div>
+    </template>
+
     <div id="catalog-section" {{catalog-section-style}}>
     <h2>Catalog</h2>
+    <div class="field">
+        <label>Publisher (organization)</label>
+        <select name="catalogPublisherOrg" class="org-ref"></select>
+    </div>
+    <div class="field">
+        <label>Creator (organization)</label>
+        <select name="catalogCreatorOrg" class="org-ref"></select>
+    </div>
     <div class="field">
         <label>Existing?</label>
         <input onchange="toggleExisting(this.checked)" type="checkbox" name="existingCatalog">
@@ -130,65 +209,26 @@
     <div class="field">
         <label>Publisher (Data Holder)</label>
         <div class="field">
-            <label>Name</label>
-            <input name="publisherName" placeholder="{{publisher-name}}">
-        </div>
-        <div class="field">
-            <label>Type</label>
-            <select name="publisherType">
-                <option value="" disabled selected hidden>Select a type</option>
-                {{hdabTypeOptions}}
-            </select>
-        </div>
-        <div class="field">
-            <label>Contact Point</label>
-            <div class="field">
-                <label>Page</label>
-                <input type="url" name="publisherPage" placeholder="{{publisher-page}}">
-            </div>
-            <div class="field">
-                <label>Email</label>
-                <input type="email" name="publisherEmail" placeholder="{{publisher-email}}">
-            </div>
-        </div>
-        <div class="field">
-            <label>Trusted data holder</label>
-            <input type="checkbox" name="publisherTrusted">
+            <label>Organization<i style="color: red">*</i>
+                <span class="desc">Defined once in the Organizations section above.</span>
+            </label>
+            <select name="datasetPublisherOrg" class="org-ref"></select>
         </div>
     </div>
 
     <div class="field">
         <label>Health Data Access Body<i style="color: red">*</i></label>
         <div class="field">
-            <label>Name<i style="color: red">*</i></label>
-            <input name="hdabName" required placeholder="{{hdab-name}}">
+            <label>Organization<i style="color: red">*</i>
+                <span class="desc">Defined once in the Organizations section above.</span>
+            </label>
+            <select name="datasetHdabOrg" class="org-ref" required></select>
         </div>
-        <div class="field">
-            <label>Type</label>
-            <select name="hdabType">
-                <option value="" disabled selected hidden>Select a type</option>
-                {{hdabTypeOptions}}
-            </select>
-        </div>
-        <div class="field">
-            <label>Contact Point</label>
-            <div class="field">
-                <label>Page</label>
-                <input type="url" name="hdabContactPage" placeholder="{{hdab-contact-page}}">
-            </div>
-            <div class="field">
-                <label>Email</label>
-                <input type="email" name="hdabContactEmail" placeholder="{{hdab-contact-email}}">
-            </div>
-        </div>
-        <div class="field">
-            <label>Note</label>
-            <textarea name="hdabNote" placeholder="{{hdab-note}}"></textarea>
-        </div>
-        <div class="field">
-            <label>Trusted data holder</label>
-            <input type="checkbox" name="hdabTrusted">
-        </div>
+    </div>
+
+    <div class="field">
+        <label>Creator (organization)</label>
+        <select name="datasetCreatorOrg" class="org-ref"></select>
     </div>
 
     <div class="field">
@@ -275,6 +315,55 @@
     </div>
 </form>
 <script>
+    // Organisations carried over from the first job of a multi-job run (empty on the first job).
+    // Their reference selects must stay usable even though the section itself is hidden.
+    var SHARED_ORGS = {{shared-organizations}};
+    var orgIndex = 0;
+
+    function addOrganization() {
+        var template = document.getElementById('org-row-template');
+        var html = template.innerHTML.replace(/__I__/g, String(orgIndex));
+        var holder = document.createElement('div');
+        holder.innerHTML = html;
+        var row = holder.firstElementChild;
+        row.querySelector('.org-index').textContent = '#' + (orgIndex + 1);
+        document.getElementById('org-rows').appendChild(row);
+        orgIndex++;
+        refreshOrgSelects();
+    }
+
+    function removeOrganization(button) {
+        var row = button.closest('.org-row');
+        if (row) row.remove();
+        refreshOrgSelects();
+    }
+
+    /** Rebuilds every organisation select from the shared registry plus the rows entered here. */
+    function refreshOrgSelects() {
+        var options = SHARED_ORGS.map(function (o) { return { id: o.id, name: o.name }; });
+        document.querySelectorAll('#org-rows .org-row').forEach(function (row) {
+            var id = row.querySelector('.org-id').value.trim();
+            var name = row.querySelector('.org-name').value.trim();
+            if (id) options.push({ id: id, name: name });
+        });
+
+        document.querySelectorAll('select.org-ref').forEach(function (select) {
+            var previous = select.value;
+            select.innerHTML = '';
+            var none = document.createElement('option');
+            none.value = '';
+            none.textContent = options.length ? '— none / enter manually —' : '— no organizations defined —';
+            select.appendChild(none);
+            options.forEach(function (o) {
+                var option = document.createElement('option');
+                option.value = o.id;
+                option.textContent = o.name ? (o.id + ' — ' + o.name) : o.id;
+                select.appendChild(option);
+            });
+            select.value = options.some(function (o) { return o.id === previous; }) ? previous : '';
+        });
+    }
+
     function toggleExisting(value) {
         const toHide = value ? document.querySelectorAll(".new-catalog-field") : document.querySelectorAll(".existing-catalog-field");
         const toShow = !value ? document.querySelectorAll(".new-catalog-field") : document.querySelectorAll(".existing-catalog-field");
@@ -298,6 +387,15 @@
                 el.disabled = true;
             });
         }
+        // Same for the organizations section: on later jobs the registry is inherited, not re-entered.
+        var orgSection = document.getElementById('organizations-section');
+        if (orgSection && orgSection.style.display === 'none') {
+            orgSection.querySelectorAll('input,textarea,select,button').forEach(function(el) {
+                el.removeAttribute('required');
+                el.disabled = true;
+            });
+        }
+        refreshOrgSelects();
     });
 </script>
 </body>

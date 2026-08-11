@@ -1,10 +1,27 @@
 {
+  "organizations": [
+    {
+      "id": "SRDC",
+      "name": "SRDC Software Research & Development and Consultancy Corp.",
+      "iri": "https://www.srdc.com.tr",
+      "type": "http://publications.europa.eu/resource/authority/corporate-body/EUI",
+      "contactPoint": {
+        "page": "https://www.srdc.com.tr/contact/",
+        "email": "info@srdc.com.tr"
+      },
+      "homepage": "https://www.srdc.com.tr/en/",
+      "note": "SRDC maintains and publishes the STAGE metadata; it is provided without warranties of any kind.",
+      "trusted": true
+    }
+  ],
   "catalog": {
     "existing": false,
     "uri": null,
     "title": "SRDC STAGE FHIR Data Catalog",
     "description": "FAIRful metadata catalog for FHIR-based health datasets extracted by SRDC within the scope of STAGE",
     "applicableLegislation": "https://eur-lex.europa.eu/eli/reg/2025/327/oj",
+    "creatorRef": "SRDC",
+    "publisherRef": "SRDC",
     "geographicalCoverage": [
       "http://publications.europa.eu/resource/authority/country/TUR"
     ],
@@ -13,24 +30,12 @@
       "end": "2026-01-01"
     },
     "themes": "http://publications.europa.eu/resource/authority/data-theme/HEAL",
-    "creator": {
-      "name": "SRDC Software Research & Development and Consultancy Corp."
-    },
     "licence": "http://creativecommons.org/licenses/by/4.0/",
     "homepage": "https://www.srdc.com.tr/en/",
     "language": [
       "http://publications.europa.eu/resource/authority/language/ENG"
     ],
     "modificationDate": "2025-10-10",
-    "publisher": {
-      "name": "SRDC Software Research & Development and Consultancy Corp.",
-      "contactPoint": {
-        "page": "https://www.srdc.com.tr/contact/",
-        "email": "info@srdc.com.tr"
-      },
-      "note": "The catalog is maintained and published by SRDC",
-      "trusted": true
-    },
     "releaseDate": "2026-01-01",
     "rights": "This catalog provides descriptive metadata only. Reuse of metadata is permitted with attribution. Access to and reuse of the referenced health datasets may require authorization and is governed by applicable health data protection, ethical approval, and national legislation."
   },
@@ -48,26 +53,20 @@
           "page": "https://www.srdc.com.tr/contact/",
           "email": "info@srdc.com.tr"
         },
-        "hdab": {
-          "name": "SRDC Software Research & Development and Consultancy Corp.",
-          "type": "http://publications.europa.eu/resource/authority/corporate-body/EUI",
-          "contactPoint": {
-            "page": "https://www.srdc.com.tr/contact/",
-            "email": "info@srdc.com.tr"
-          }
-        },
-        "publisher": {
-          "name": "SRDC Software Research & Development and Consultancy Corp.",
-          "type": "http://publications.europa.eu/resource/authority/corporate-body/EUI",
-          "contactPoint": {
-            "page": "https://www.srdc.com.tr/contact/",
-            "email": "info@srdc.com.tr"
-          },
-          "note": "The publisher provides this dataset metadata without warranties of any kind.",
-          "trusted": true
-        },
-        "keyword": ["fhir", "health data", "clinical observations", "questionnaire responses", "interoperability", "srdc"],
-        "spatial": ["http://publications.europa.eu/resource/authority/country/TUR"],
+        "publisherRef": "SRDC",
+        "creatorRef": "SRDC",
+        "hdabRef": "SRDC",
+        "keyword": [
+          "fhir",
+          "health data",
+          "clinical observations",
+          "questionnaire responses",
+          "interoperability",
+          "srdc"
+        ],
+        "spatial": [
+          "http://publications.europa.eu/resource/authority/country/TUR"
+        ],
         "healthCategory": "http://13.81.34.152:1101/resource/authority/healthcategories/EHRS",
         "datasetType": "http://publications.europa.eu/resource/authority/dataset-type/RELEASE",
         "applicableLegislation": "https://eur-lex.europa.eu/eli/reg/2025/327/oj",
@@ -84,10 +83,6 @@
         },
         "qualityAnnotation": "Data validated against STAGE quality assurance protocols and FHIR conformance requirements.",
         "conformsTo": "https://www.wikidata.org/entity/Q19597236",
-        "creator": {
-          "name": "SRDC Software Research & Development and Consultancy Corp.",
-          "email": "info@srdc.com.tr"
-        },
         "documentation": "https://www.srdc.com.tr/ehealth/",
         "alternative": "SRDC STAGE FHIR Health Data Repository",
         "codeValues": [
@@ -122,7 +117,7 @@
         "otherIdentifier": [],
         "qualifiedAttribution": [
           {
-            "name": "SRDC Software Research & Development and Consultancy Corp.",
+            "name": "SRDC",
             "role": "sponsor"
           }
         ],
