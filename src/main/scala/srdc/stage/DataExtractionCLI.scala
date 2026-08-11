@@ -5,7 +5,7 @@ import org.apache.spark.sql.SparkSession
 import srdc.stage.config.{AppConfig, CommandLineArgumentParser}
 import org.slf4j.{Logger, LoggerFactory}
 import srdc.stage.jobs.{BaseExtraction, BundleExtraction, FullExtraction, ObservationExtraction, SurveyExtraction}
-import srdc.stage.rdf.{CatalogMetadataUserInput, DatasetStats, MetadataUserInput}
+import srdc.stage.rdf.{DatasetStats, MetadataUserInput, SharedMetadata}
 
 /**
  * Factory object responsible for bootstrapping the application.
@@ -97,11 +97,12 @@ object DataExtractionCLI {
         } else fhirApiSource
       )
 
-    var sharedCatalog: Option[CatalogMetadataUserInput] = None
+    // Catalog and organisation registry are entered once and reused by every subsequent job.
+    var shared: Option[SharedMetadata] = None
     val extractions = sparkJobs.flatMap { jobName =>
       logger.info(s"Extracting features from FHIR for module: $jobName")
-      val jobMetadata = MetadataUserInput.load(config, jobName, sharedCatalog)
-      if (sharedCatalog.isEmpty) sharedCatalog = Some(jobMetadata.catalog)
+      val jobMetadata = MetadataUserInput.load(config, jobName, shared)
+      if (shared.isEmpty) shared = Some(SharedMetadata(jobMetadata.catalog, jobMetadata.organizations))
       jobName match {
         case "survey" =>
           Some((SurveyExtraction, SurveyExtraction.extractDataAndStats(config, jobMetadata), jobMetadata))
@@ -160,14 +161,14 @@ object DataExtractionCLI {
     val namedJobs = jobs.map(_.trim).filter(_.nonEmpty)
     val effectiveJobs = if (namedJobs.isEmpty) Array("") else namedJobs
 
-    var sharedCatalog: Option[CatalogMetadataUserInput] = None
+    var shared: Option[SharedMetadata] = None
     var currentCatalogUri: Option[String] = None
 
     effectiveJobs.foreach { jobName =>
       val jobLabel = if (jobName.isEmpty) "metadata" else jobName
       logger.info(s"--- Finalizing and Validating Module (no-FHIR): $jobLabel ---")
-      val jobMetadata = MetadataUserInput.load(config, jobName, sharedCatalog)
-      if (sharedCatalog.isEmpty) sharedCatalog = Some(jobMetadata.catalog)
+      val jobMetadata = MetadataUserInput.load(config, jobName, shared)
+      if (shared.isEmpty) shared = Some(SharedMetadata(jobMetadata.catalog, jobMetadata.organizations))
 
       val jobObject: BaseExtraction = jobName match {
         case "survey"      => SurveyExtraction
