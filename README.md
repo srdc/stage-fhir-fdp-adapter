@@ -176,3 +176,11 @@ Inside every `rdf/` directory:
 4. **`CSVW.ttl`** - W3C CSV-on-the-Web schema describing the five columns. The `code` and `display` columns reference a SKOS concept scheme (`observation_codes` for Observation jobs, `question_codes` for Survey jobs). For Survey runs, additional per-question SKOS schemes record the answer-option value sets pulled from the Questionnaire definitions. All SKOS content lives in the same `CSVW.ttl` — there is no separate `Vocabularies.ttl`.
 
 The bundle job produces only `bundle.json` (no CSV, no RDF). Each entry has a `request.method` of `PUT` (when the resource carries an `id`) or `POST`, so the file can be POSTed to another FHIR server to recreate the dataset.
+
+## Acknowledgements
+
+This software has been developed as part of the [STAGE project](https://stage-healthyageing.eu/).
+
+STAGE has received funding from the European Union’s Horizon Europe Research and Innovation Programme under grant agreement nº 101137146. UK participants in Horizon Europe Project STAGE are supported by UKRI grant numbers 10112787 (Beta Technology), 10099041 (University of Bristol) and 10109957 (Imperial College London).
+
+For more information about the project, visit the [STAGE project website](https://stage-healthyageing.eu/).
