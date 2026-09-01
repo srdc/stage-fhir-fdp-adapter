@@ -127,6 +127,62 @@ object FdpClient {
   }
 
   /**
+   * Moves a freshly created FDP resource from DRAFT to PUBLISHED.
+   *
+   * @param resourceUri The absolute URI of the resource as returned by postResource.
+   * @return The HTTP status returned by the state endpoint.
+   */
+  def publishResource(resourceUri: String, email: String, password: String, baseUrl: String): Int = {
+    val token = getToken(baseUrl, email, password)
+    val stateUri = s"${stripTrailingSlash(resourceUri)}/meta/state"
+
+    val request = HttpRequest.newBuilder()
+      .uri(URI.create(stateUri))
+      .header("Authorization", s"Bearer $token")
+      .header("Content-Type", "application/json")
+      .header("Accept", "application/json")
+      .PUT(BodyPublishers.ofString("""{"current":"PUBLISHED"}""", StandardCharsets.UTF_8))
+      .build()
+
+    val response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
+
+    if (response.statusCode() / 100 != 2) {
+      throw new RuntimeException(s"FDP publish failed for $resourceUri. Status: ${response.statusCode()}. Body: ${response.body()}")
+    }
+    logger.info("Published: {}", resourceUri)
+    response.statusCode()
+  }
+
+  /**
+   * Replaces an existing FDP resource with the given Model (HTTP PUT).
+   *
+   * @param resourceUri The absolute URI of the resource to replace as returned by postResource.
+   * @param model       The full Jena Model to store.
+   * @return A PostResult carrying the status and response body.
+   */
+  def putResource(resourceUri: String, model: Model, email: String, password: String, baseUrl: String): PostResult = {
+    val token = getToken(baseUrl, email, password)
+    val turtle = serializeModelAsTurtle(model)
+
+    logger.info("Updating FDP resource: {}", resourceUri)
+
+    val request = HttpRequest.newBuilder()
+      .uri(URI.create(resourceUri))
+      .header("Authorization", s"Bearer $token")
+      .header("Content-Type", "text/turtle")
+      .PUT(BodyPublishers.ofString(turtle, StandardCharsets.UTF_8))
+      .build()
+
+    val response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
+
+    if (response.statusCode() / 100 != 2) {
+      throw new RuntimeException(s"FDP Put Failed for $resourceUri. Status: ${response.statusCode()}. Body: ${response.body()}")
+    }
+
+    PostResult(response.statusCode(), Some(URI.create(resourceUri)), response.body())
+  }
+
+  /**
    * Extracts the value of the "token" field from a simple JSON string.
    *
    * @param json The JSON string returned by the authentication endpoint.

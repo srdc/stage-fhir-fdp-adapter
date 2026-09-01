@@ -17,4 +17,6 @@ object HealthDCATAP {
   final val maxTypicalAge: Property = m.createProperty(NS + "maxTypicalAge")
   final val minTypicalAge: Property = m.createProperty(NS + "minTypicalAge")
   final val numberOfUniqueIndividuals: Property = m.createProperty(NS + "numberOfUniqueIndividuals")
+  final val hasVariables: Property = m.createProperty(NS + "hasVariables")
+  final val hasStructuredData: Property = m.createProperty(NS + "hasStructuredData")
 }

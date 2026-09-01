@@ -109,6 +109,7 @@ case class DatasetMetadataUserInput(
                                      versionNotes: Option[String] = None,
                                      wasGeneratedBy: Option[Seq[String]] = None,
                                      purpose: Option[String] = None,
+                                     structuredData: Option[Boolean] = None,
                                      qualityAnnotation: String = ""
                                    )
 
@@ -524,6 +525,7 @@ object MetadataUserInput {
         accessRights = getOpt("accessRights"),
         healthTheme = getOpt("healthTheme"),
         qualityAnnotation = reqStr("datasetQualityAnnotation", "Quality Annotation"),
+        structuredData = getBool("datasetStructuredData"),
         frequency = getOpt("datasetFrequency"),
         temporalCoverage = None, // Handled dynamically via FHIR stats
         sample = getOpt("sampleAccessUrl").map { url =>
@@ -868,7 +870,8 @@ object MetadataUserInput {
         temporalResolution = getFormattedOption(datasetSheet, 62),
         versionNotes = getFormattedOption(datasetSheet, 63),
         wasGeneratedBy = getFormattedOption(datasetSheet, 64).map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq),
-        purpose = getFormattedOption(datasetSheet, 65)
+        purpose = getFormattedOption(datasetSheet, 65),
+        structuredData = toBooleanOption(getCellStr(datasetSheet, 75), "Dataset.structuredData")
       ),
       distribution = DistributionMetadataUserInput(
         title = getFormattedOption(distSheet, 1),

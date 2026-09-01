@@ -260,7 +260,7 @@ object MetadataWriter {
    * @param sharedCatalogUri An optional URI to reuse an existing Catalog across multiple jobs.
    * @return The URI of the Catalog used or created.
    */
-  def exportResults(outputDir: String, fdpUrl: String, fdpEmail: String, fdpPassword: String, meta: MetadataUserInput, jobStats: DatasetStats, globalStats: DatasetStats, runMode: String, sharedCatalogUri: Option[String] = None, isFhirConfigured: Boolean = true, vocabBase: String = DEFAULT_VOCAB_BASE): String = {
+  def exportResults(outputDir: String, fdpUrl: String, fdpEmail: String, fdpPassword: String, meta: MetadataUserInput, jobStats: DatasetStats, globalStats: DatasetStats, runMode: String, sharedCatalogUri: Option[String] = None, isFhirConfigured: Boolean = true, vocabBase: String = DEFAULT_VOCAB_BASE, keepDrafts: Boolean = false): String = {
     logger.info("Starting Metadata Export...")
 
     val isFdpMode = fdpUrl.trim.nonEmpty && fdpEmail.trim.nonEmpty
@@ -293,6 +293,7 @@ object MetadataWriter {
         val model = createCatalogModel(meta, globalStats, "", isFdpMode, fdpUrl, runMode, registry)
         val loc = postToFdp(fdpUrl, fdpEmail, fdpPassword, "catalog", model)
         logger.info("Catalog confirmed at: {}", loc)
+        publish(loc, fdpEmail, fdpPassword, fdpUrl, keepDrafts)
         loc
       } else {
         val uri = if (meta.catalog.existing.contains(true) && configuredCatalogUri.trim.nonEmpty) configuredCatalogUri.trim else s"urn:uuid:${UUID.randomUUID()}"
@@ -302,17 +303,29 @@ object MetadataWriter {
     }
     saveLocalFile(outputDir, "Catalog", createCatalogModel(meta, globalStats, finalCatalogUri, isFdpMode, fdpUrl, runMode, registry))
 
+    val hasVariableDescription =
+      if (isFhirConfigured) jobStats.columns.nonEmpty
+      else meta.dataDictionary.exists(_.nonEmpty)
+    val structuredData = meta.dataset.structuredData.getOrElse(hasVariableDescription)
+
+    val initialCsvwUri = if (isFdpMode) "" else s"urn:uuid:${UUID.randomUUID()}"
+    val localVariablesUri = if (isFdpMode) None else Some(initialCsvwUri).filter(_ => hasVariableDescription)
+
     // 2. Dataset (Uses Job-Specific Stats)
+    var datasetPublished = false
     val finalDatasetUri = if (isFdpMode) {
       logger.info("Creating NEW Dataset on FDP...")
-      val datasetModel = createDatasetModel(meta, jobStats, finalCatalogUri, "", runMode, registry)
+      val datasetModel = createDatasetModel(meta, jobStats, finalCatalogUri, "", runMode, registry,
+        variablesUri = None, structuredData = structuredData)
       val loc = postToFdp(fdpUrl, fdpEmail, fdpPassword, "dataset", datasetModel)
       logger.info("Dataset created at: {}", loc)
+      datasetPublished = publish(loc, fdpEmail, fdpPassword, fdpUrl, keepDrafts)
       loc
     } else {
       s"urn:uuid:${UUID.randomUUID()}"
     }
-    saveLocalFile(outputDir, "Dataset", createDatasetModel(meta, jobStats, finalCatalogUri, finalDatasetUri, runMode, registry))
+    saveLocalFile(outputDir, "Dataset", createDatasetModel(meta, jobStats, finalCatalogUri, finalDatasetUri,
+      runMode, registry, variablesUri = localVariablesUri, structuredData = structuredData))
 
     // 3. Main Distribution
     logger.info("Preparing Distribution (Linking to Parent Dataset: {})...", finalDatasetUri)
@@ -323,15 +336,15 @@ object MetadataWriter {
     val finalDistUri = if (isFdpMode) {
       val loc = postToFdp(fdpUrl, fdpEmail, fdpPassword, "distribution", distModel)
       logger.info("Distribution created at: {}", loc)
+      publish(loc, fdpEmail, fdpPassword, fdpUrl, keepDrafts)
       loc
     } else {
       initialDistUri
     }
 
     // 4. CSVW
-    val initialCsvwUri = if (isFdpMode) "" else s"urn:uuid:${UUID.randomUUID()}"
     val csvwModel = if (isFhirConfigured) {
-      val model = createCsvwModel(jobStats, initialCsvwUri, finalDistUri, vocabBase)
+      val model = createCsvwModel(jobStats, initialCsvwUri, finalDatasetUri, vocabBase)
       if (jobStats.vocabularies.nonEmpty) {
         model.add(createConceptSchemes(jobStats, vocabBase))
       }
@@ -345,7 +358,7 @@ object MetadataWriter {
         fields = fields,
         vocabularies = meta.dataDictionaryValueSets,
         subjectUri = initialCsvwUri,
-        parentDistributionUri = finalDistUri,
+        parentDatasetUri = finalDatasetUri,
         vocabBase = vocabBase,
         registry = registry
       )
@@ -354,14 +367,51 @@ object MetadataWriter {
     saveLocalFile(outputDir, "CSVW", csvwModel)
 
     if (isFdpMode) {
-      val loc = postToFdp(fdpUrl, fdpEmail, fdpPassword, "csvw", csvwModel)
-      logger.info("CSVW created at: {}", loc)
+      val csvwUri = postToFdp(fdpUrl, fdpEmail, fdpPassword, "csvw", csvwModel)
+      logger.info("CSVW created at: {}", csvwUri)
+      publish(csvwUri, fdpEmail, fdpPassword, fdpUrl, keepDrafts)
+
+      // 5. Link the variables back to the Dataset
+      if (hasVariableDescription && !datasetPublished) {
+        logger.warn("Dataset {} is still in DRAFT, so healthdcatap:hasVariables cannot be attached " +
+          "(the FDP refuses updates on drafts). Publish it and re-run, or drop --keep-drafts.", finalDatasetUri)
+      }
+      if (hasVariableDescription && datasetPublished) {
+        try {
+          val updated = createDatasetModel(meta, jobStats, finalCatalogUri, finalDatasetUri, runMode, registry,
+            variablesUri = Some(csvwUri), structuredData = structuredData, distributionUri = Some(finalDistUri))
+          FdpClient.putResource(finalDatasetUri, updated, fdpEmail, fdpPassword, fdpUrl)
+          saveLocalFile(outputDir, "Dataset", updated)
+          logger.info("Dataset updated with healthdcatap:hasVariables -> {}", csvwUri)
+        } catch {
+          case e: Throwable =>
+            // The four layers are already published; losing the back-link is not worth failing the run.
+            logger.warn("Could not add healthdcatap:hasVariables to the Dataset ({}). " +
+              "Catalog, Dataset, Distribution and CSVW are published. Cause: {}", finalDatasetUri, e.getMessage)
+        }
+      }
       logger.info("Metadata Generation and FDP Validations are Successfully Completed")
     } else {
       logger.info("Metadata Generation is Successfully Completed")
     }
 
     finalCatalogUri
+  }
+
+  /**
+   * Moves a created resource out of DRAFT. Failures are logged, not thrown: the resource exists either
+   * way, and a demonstrator run should not abort because a state change was refused.
+   */
+  private def publish(uri: String, fdpEmail: String, fdpPassword: String, fdpUrl: String, keepDrafts: Boolean): Boolean = {
+    if (keepDrafts) return false
+    try {
+      FdpClient.publishResource(uri, fdpEmail, fdpPassword, fdpUrl)
+      true
+    } catch {
+      case e: Throwable =>
+        logger.warn("Could not publish {} - it stays in DRAFT. Cause: {}", uri, e.getMessage)
+        false
+    }
   }
 
   /**
@@ -521,7 +571,7 @@ object MetadataWriter {
    * @param runMode    The active run mode defining dynamic fallback behavior.
    * @return A populated Jena Model.
    */
-  private def createDatasetModel(meta: MetadataUserInput, stats: DatasetStats, catalogUri: String, subjectUri: String, runMode: String, registry: OrganizationRegistry): Model = {
+  private def createDatasetModel(meta: MetadataUserInput, stats: DatasetStats, catalogUri: String, subjectUri: String, runMode: String, registry: OrganizationRegistry, variablesUri: Option[String] = None, structuredData: Boolean = false, distributionUri: Option[String] = None): Model = {
     val m = createModel()
     val dataset = createSubject(m, subjectUri)
       .addProperty(RDF.`type`, DCAT.Dataset)
@@ -572,6 +622,11 @@ object MetadataWriter {
     }
 
     meta.dataset.populationCoverage.foreach(dataset.addLiteral(HealthDCATAP.populationCoverage, _))
+
+    dataset.addLiteral(HealthDCATAP.hasStructuredData, m.createTypedLiteral(structuredData, XSDDatatype.XSDboolean))
+    variablesUri.filter(_.trim.nonEmpty).foreach(uri => dataset.addProperty(HealthDCATAP.hasVariables, m.createResource(uri)))
+
+    distributionUri.filter(_.trim.nonEmpty).foreach(uri => dataset.addProperty(DCAT.distribution, m.createResource(uri)))
 
     val numRec = if (!isExcel && stats.recordCount > 0) stats.recordCount else meta.dataset.numRecords.map(_.toLong).getOrElse(0L)
     val numPat = if (!isExcel && stats.uniquePatients > 0) stats.uniquePatients else meta.dataset.numUniqueIndividual.map(_.toLong).getOrElse(0L)
@@ -667,7 +722,7 @@ object MetadataWriter {
    *
    * @param stats      DatasetStats containing the column definitions extracted from the dataframe.
    * @param subjectUri The URI assigned to the CSVW Resource by the FDP server.
-   * @param parentUri  The URI of the parent Distribution (for dct:isPartOf linking).
+   * @param parentUri  The URI of the parent Dataset (dct:isPartOf)
    * @param vocabBase  Base URI for csvw:propertyUrl values.
    * @return A populated Jena Model representing the CSVW schema.
    */
@@ -757,7 +812,7 @@ object MetadataWriter {
    * @param vocabBase Base URI used for emitted SKOS scheme + concept URIs.
    * @return A populated Jena Model representing the dictionary as a CSVW schema with SKOS vocabularies.
    */
-  def createDictionaryModel(fields: List[CsvwField], vocabularies: Map[String, Map[String, String]] = Map.empty, subjectUri: String = "", parentDistributionUri: String = "", vocabBase: String = DEFAULT_VOCAB_BASE, registry: OrganizationRegistry = OrganizationRegistry.empty(DEFAULT_VOCAB_BASE)): Model = {
+  def createDictionaryModel(fields: List[CsvwField], vocabularies: Map[String, Map[String, String]] = Map.empty, subjectUri: String = "", parentDatasetUri: String = "", vocabBase: String = DEFAULT_VOCAB_BASE, registry: OrganizationRegistry = OrganizationRegistry.empty(DEFAULT_VOCAB_BASE)): Model = {
     val m = createModel()
     val qudtUnit = m.createProperty("http://qudt.org/schema/qudt/unit")
 
@@ -781,8 +836,8 @@ object MetadataWriter {
       .addProperty(DCTerms.title, m.createLiteral("Data Dictionary Schema", "en"))
       .addProperty(DCTerms.description, m.createLiteral("CSVW schema describing the variables defined in the data dictionary.", "en"))
 
-    if (parentDistributionUri.nonEmpty) {
-      tableGroup.addProperty(DCTerms.isPartOf, m.createResource(parentDistributionUri))
+    if (parentDatasetUri.nonEmpty) {
+      tableGroup.addProperty(DCTerms.isPartOf, m.createResource(parentDatasetUri))
     }
 
     val table = m.createResource(s"urn:uuid:${UUID.randomUUID()}")

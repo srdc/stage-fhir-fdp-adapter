@@ -112,6 +112,11 @@ object CommandLineArgumentParser {
           .text("Half-width around --reference, as an ISO-8601 duration (e.g. P30D, P6M, P1Y). " +
             "Resolved into [reference - window, reference + window]."),
 
+        opt[Unit]("keep-drafts")
+          .action((_, c) => c.copy(keepDrafts = true))
+          .text("Leave published FDP resources in DRAFT state. By default every created resource is " +
+            "moved to PUBLISHED, which is also required before a resource can be updated."),
+
         opt[String]("vocab-base")
           .action((x, c) => c.copy(vocabBase = x.trim.replaceAll("/+$", "")))
           .text("Base URI for SKOS schemes and CSVW propertyUrl values. " +

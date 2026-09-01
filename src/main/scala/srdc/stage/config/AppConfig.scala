@@ -23,7 +23,8 @@ case class AppConfig(
                       token: Option[String],
                       dateFrom: Option[String] = None,
                       dateTo: Option[String] = None,
-                      vocabBase: String = "http://stage-healthyageing.eu/fdp/vocab"
+                      vocabBase: String = "http://stage-healthyageing.eu/fdp/vocab",
+                      keepDrafts: Boolean = false
                     )
 
 object AppConfig {

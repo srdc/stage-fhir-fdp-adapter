@@ -150,7 +150,8 @@ abstract class BaseExtraction {
       runMode = cfg.runMode,
       sharedCatalogUri = catalogUri,
       isFhirConfigured = true,
-      vocabBase = cfg.vocabBase
+      vocabBase = cfg.vocabBase,
+      keepDrafts = cfg.keepDrafts
     )
   }
 
@@ -175,7 +176,8 @@ abstract class BaseExtraction {
       runMode = cfg.runMode,
       sharedCatalogUri = catalogUri,
       isFhirConfigured = false,
-      vocabBase = cfg.vocabBase
+      vocabBase = cfg.vocabBase,
+      keepDrafts = cfg.keepDrafts
     )
   }
 }
