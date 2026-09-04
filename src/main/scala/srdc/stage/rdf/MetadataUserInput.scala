@@ -19,12 +19,9 @@ import srdc.stage.vocab.PubEU
 import scala.collection.mutable
 import scala.util.Try
 
-case class Agent(name: String, email: Option[String] = None, `type`: Option[String] = None)
 case class Period(start: Option[String], end: Option[String])
 case class CodeValue(scheme: Option[String], notation: String, label: String)
 case class ContactPointMetadataUserInput(name: Option[String] = None, page: Option[String] = None, email: Option[String] = None)
-case class HDABMetadataUserInput(name: Option[String] = None, `type`: Option[String] = None, contactPoint: ContactPointMetadataUserInput, note: Option[String] = None, trusted: Option[Boolean] = None)
-case class Publisher(name: String, `type`: Option[String] = None, contactPoint: ContactPointMetadataUserInput, note: Option[String] = None, trusted: Option[Boolean] = None, url: Option[String] = None)
 case class QualifiedAttribution(name: String, role: Option[String])
 case class Checksum(algorithm: String, value: String)
 
@@ -34,7 +31,8 @@ case class CatalogMetadataUserInput(
                                      title: Option[String] = None,
                                      description: Option[String] = None,
                                      applicableLegislation: Option[String] = None,
-                                     creator: Option[Agent] = None,
+                                     creatorRef: Option[String] = None,
+                                     publisherRef: Option[String] = None,
                                      geographicalCoverage: Option[Seq[String]] = None,
                                      temporalCoverage: Option[Period] = None,
                                      licence: Option[String] = None,
@@ -42,7 +40,6 @@ case class CatalogMetadataUserInput(
                                      homepage: Option[String] = None,
                                      language: Option[Seq[String]] = None,
                                      modificationDate: Option[String] = None,
-                                     publisher: Option[Publisher] = None,
                                      releaseDate: Option[String] = None,
                                      rights: Option[String] = None
                                    )
@@ -75,9 +72,10 @@ case class DatasetMetadataUserInput(
                                      populationCoverage: Option[String] = None,
                                      theme: Option[String] = None,
                                      provenance: Option[String] = None,
-                                     contactPoint: ContactPointMetadataUserInput,
-                                     hdab: HDABMetadataUserInput,
-                                     publisher: Option[Publisher] = None,
+                                     contactPoint: ContactPointMetadataUserInput = ContactPointMetadataUserInput(),
+                                     publisherRef: Option[String] = None,
+                                     creatorRef: Option[String] = None,
+                                     hdabRef: Option[String] = None,
                                      keyword: Option[Seq[String]] = None,
                                      spatial: Option[Seq[String]] = None,
                                      healthCategory: Option[String] = None,
@@ -86,7 +84,6 @@ case class DatasetMetadataUserInput(
                                      accessRights: Option[String] = None,
                                      healthTheme: Option[String] = None,
                                      conformsTo: Option[String] = None,
-                                     creator: Option[Agent] = None,
                                      documentation: Option[String] = None,
                                      frequency: Option[String] = None,
                                      sample: Option[DistributionMetadataUserInput] = None,
@@ -135,7 +132,8 @@ case class CsvwField(
                       minValue: Option[String] = None,
                       maxValue: Option[String] = None,
                       required: Option[String] = None,
-                      conditionalOn: Option[String] = None
+                      conditionalOn: Option[String] = None,
+                      repetitionPeriod: Option[String] = None
                     )
 
 case class MetadataUserInput(
@@ -143,8 +141,14 @@ case class MetadataUserInput(
                          dataset: DatasetMetadataUserInput,
                          distribution: DistributionMetadataUserInput,
                          dataDictionary: Option[List[CsvwField]] = None,
-                         dataDictionaryValueSets: Map[String, Map[String, String]] = Map.empty
+                         dataDictionaryValueSets: Map[String, Map[String, String]] = Map.empty,
+                         organizations: Seq[Organization] = Seq.empty
                        )
+
+case class SharedMetadata(
+                           catalog: CatalogMetadataUserInput,
+                           organizations: Seq[Organization] = Seq.empty
+                         )
 
 case class JobMetadata(
                         dataset: DatasetMetadataUserInput,
@@ -155,7 +159,8 @@ case class JobMetadata(
 
 case class MultiJobMetadataInput(
                                   catalog: CatalogMetadataUserInput,
-                                  jobs: Map[String, JobMetadata]
+                                  jobs: Map[String, JobMetadata],
+                                  organizations: Option[Seq[Organization]] = None
                                 )
 
 /**
@@ -175,11 +180,11 @@ object MetadataUserInput {
    * @param appConfig The initial application configuration (usually from CLI args).
    * @return A fully populated ConfigLoader object.
    */
-  def load(appConfig: AppConfig, jobName: String = "", sharedCatalog: Option[CatalogMetadataUserInput] = None): MetadataUserInput = {
+  def load(appConfig: AppConfig, jobName: String = "", shared: Option[SharedMetadata] = None): MetadataUserInput = {
     appConfig.runMode.toLowerCase match {
       case "json" => loadFromJson(appConfig, jobName)
-      case "excel" => loadFromExcel(appConfig, jobName, sharedCatalog)
-      case "browser" => loadFromBrowser(appConfig, jobName, sharedCatalog)
+      case "excel" => loadFromExcel(appConfig, jobName, shared)
+      case "browser" => loadFromBrowser(appConfig, jobName, shared)
       case _      => throw new IllegalArgumentException(s"Unknown runMode: ${appConfig.runMode}")
     }
   }
@@ -196,20 +201,37 @@ object MetadataUserInput {
     val jsonContent = source.mkString
     source.close()
 
-    val multiJob = Try(JsonFormatter.fromJson[MultiJobMetadataInput](jsonContent))
-      .getOrElse(throw new IllegalArgumentException("Invalid JSON metadata file! Expected multi-job format with 'catalog' and 'jobs' keys."))
+    val multiJob = Try(JsonFormatter.fromJson[MultiJobMetadataInput](jsonContent)) match {
+      case scala.util.Success(parsed) => parsed
+      case scala.util.Failure(cause) =>
+        // Surface the underlying parse error: an unexpected/renamed key is otherwise indistinguishable
+        // from a malformed file.
+        logger.error("Failed to parse JSON metadata file: {}", cause.getMessage)
+        throw new IllegalArgumentException(
+          s"Invalid JSON metadata file! Expected multi-job format with 'catalog' and 'jobs' keys (optionally 'organizations'). Cause: ${cause.getMessage}",
+          cause
+        )
+    }
 
     val jobMeta = multiJob.jobs.getOrElse(jobName,
       throw new IllegalArgumentException(
         s"No metadata found for job '$jobName' in config JSON. Available jobs: ${multiJob.jobs.keys.mkString(", ")}"
       ))
 
+    // Organizations are declared once at the top level, next to the catalog, and shared by every job.
+    val organizations = multiJob.organizations.getOrElse(Seq.empty)
+    OrganizationRegistry.validate(organizations)
+    if (organizations.nonEmpty) {
+      logger.info("Loaded {} organisation(s) from JSON: {}", organizations.size, organizations.map(_.id).mkString(", "))
+    }
+
     MetadataUserInput(
       catalog = multiJob.catalog,
       dataset = jobMeta.dataset,
       distribution = jobMeta.distribution,
       dataDictionary = jobMeta.dataDictionary,
-      dataDictionaryValueSets = jobMeta.dataDictionaryValueSets
+      dataDictionaryValueSets = jobMeta.dataDictionaryValueSets,
+      organizations = organizations
     )
   }
 
@@ -219,12 +241,12 @@ object MetadataUserInput {
    * @param appConfig Configuration containing the Excel path.
    * @return ConfigLoader object parsed from Excel.
    */
-  private def loadFromExcel(appConfig: AppConfig, jobName: String = "", sharedCatalog: Option[CatalogMetadataUserInput] = None): MetadataUserInput = {
+  private def loadFromExcel(appConfig: AppConfig, jobName: String = "", shared: Option[SharedMetadata] = None): MetadataUserInput = {
     val jobSuffix = if (jobName.nonEmpty) s" (job: $jobName)" else ""
     logger.info("Loading static metadata from Excel: {}{}", appConfig.excelPath, jobSuffix)
     val file = new File(appConfig.excelPath)
     val wb = WorkbookFactory.create(file)
-    val metadata = fromExcel(wb, jobName, sharedCatalog)
+    val metadata = fromExcel(wb, jobName, shared)
     wb.close()
     metadata
   }
@@ -236,7 +258,7 @@ object MetadataUserInput {
    * @param appConfig Default application configuration values to pre-fill the form (e.g., FDP URL, Output Dir).
    * @return The updated ConfigLoader object submitted by the user.
    */
-  private def loadFromBrowser(appConfig: AppConfig, jobName: String = "", sharedCatalog: Option[CatalogMetadataUserInput] = None): MetadataUserInput = {
+  private def loadFromBrowser(appConfig: AppConfig, jobName: String = "", shared: Option[SharedMetadata] = None): MetadataUserInput = {
     logger.info("Fetching EU Vocabularies. This might take a few seconds...")
 
     val healthCategories = Map(
@@ -333,11 +355,19 @@ object MetadataUserInput {
     // Job header and catalog visibility in multi-job browser run
     val jobLabel = if (jobName.nonEmpty) jobName else "default"
     val jobBannerHtml = if (jobName.nonEmpty) {
-      s"""<div class="job-banner">Configuring metadata for job: <span class="job-name">$jobLabel</span>${if (sharedCatalog.isDefined) " (Catalog details carried over from the first job)" else ""}</div>"""
+      s"""<div class="job-banner">Configuring metadata for job: <span class="job-name">$jobLabel</span>${if (shared.isDefined) " (Catalog details carried over from the first job)" else ""}</div>"""
     } else ""
+    val sharedOrganizations = shared.map(_.organizations).getOrElse(Seq.empty)
+    def jsonStr(v: String): String = "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+    val sharedOrgsJson = sharedOrganizations
+      .map(o => s"""{"id":${jsonStr(o.id)},"name":${jsonStr(o.name)}}""")
+      .mkString("[", ",", "]")
+
     htmlContent = htmlContent
       .replace("{{job-banner}}", jobBannerHtml)
-      .replace("{{catalog-section-style}}", if (sharedCatalog.isDefined) """style="display:none"""" else "")
+      .replace("{{catalog-section-style}}", if (shared.isDefined) """style="display:none"""" else "")
+      .replace("{{organizations-section-style}}", if (shared.isDefined) """style="display:none"""" else "")
+      .replace("{{shared-organizations}}", sharedOrgsJson)
 
     // Scrub all unused placeholders
     htmlContent = htmlContent.replaceAll("\\{\\{[^}]+\\}\\}", "")
@@ -365,8 +395,8 @@ object MetadataUserInput {
 
           val formResult = fromFormData(formData)
           // Shared catalog from the first job
-          resultConfig = sharedCatalog match {
-            case Some(catalog) => Some(formResult.copy(catalog = catalog))
+          resultConfig = shared match {
+            case Some(s) => Some(formResult.copy(catalog = s.catalog, organizations = s.organizations))
             case None => Some(formResult)
           }
 
@@ -381,7 +411,7 @@ object MetadataUserInput {
     server.setExecutor(null)
     server.start()
     val url = s"http://localhost:${server.getAddress.getPort}"
-    val catalogNote = if (sharedCatalog.isDefined) " (catalog shared from first job)" else ""
+    val catalogNote = if (shared.isDefined) " (catalog shared from first job)" else ""
     logger.info("Waiting for browser input for job '{}'{} — form launched at: {}", jobLabel, catalogNote, url)
 
     if (Desktop.isDesktopSupported) {
@@ -409,24 +439,60 @@ object MetadataUserInput {
     def getBool(key: String): Option[Boolean] = formData.get(key).map(_ == "on")
     def reqStr(key: String, name: String): String = getOpt(key).getOrElse(throw new IllegalArgumentException(s"$name is required"))
 
-    val publisher = getOpt("publisherName").map { name =>
-      Publisher(
-        name = name,
-        `type` = getOpt("publisherType"),
-        contactPoint = ContactPointMetadataUserInput(page = getOpt("publisherPage"), email = getOpt("publisherEmail")),
-        trusted = getBool("publisherTrusted")
+    val organizations: Seq[Organization] = {
+      val pattern = """^org\.(\d+)\.(.+)$""".r
+      val grouped = mutable.LinkedHashMap.empty[Int, mutable.Map[String, String]]
+      formData.foreach {
+        case (key, value) => key match {
+          case pattern(idx, field) =>
+            grouped.getOrElseUpdate(idx.toInt, mutable.Map.empty)(field) = value
+          case _ => ()
+        }
+      }
+      val parsed = grouped.toSeq.sortBy(_._1).flatMap { case (_, fields) =>
+        def field(name: String): Option[String] = fields.get(name).map(_.trim).filter(_.nonEmpty)
+        field("id").map { id =>
+          Organization(
+            id = id,
+            name = field("name").getOrElse(""),
+            iri = field("iri"),
+            `type` = field("type"),
+            contactPoint = ContactPointMetadataUserInput(page = field("page"), email = field("email")),
+            homepage = field("homepage"),
+            note = field("note"),
+            trusted = fields.get("trusted").map(_ == "on"),
+            identifiers = field("identifiers")
+              .map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq).getOrElse(Seq.empty)
+          )
+        }
+      }
+      OrganizationRegistry.validate(parsed)
+      if (parsed.nonEmpty) {
+        logger.info("Received {} organisation(s) from the form: {}", parsed.size, parsed.map(_.id).mkString(", "))
+      }
+      parsed
+    }
+
+    val orgIndex = new OrganizationIndex(organizations)
+
+    /** Validates a reference submitted by one of the form's organisation selects. */
+    def orgRef(key: String, field: String): Option[String] = getOpt(key).map { ref =>
+      orgIndex.lookup(ref).map(_.id).getOrElse(
+        throw new IllegalArgumentException(
+          s"$field references organisation '$ref', which is not defined in the Organizations section" +
+            (if (orgIndex.nonEmpty) s" (known ids: ${orgIndex.ids.mkString(", ")})." else ".")
+        )
       )
     }
 
-    val hdab = HDABMetadataUserInput(
-      name = getOpt("hdabName"),
-      `type` = getOpt("hdabType"),
-      contactPoint = ContactPointMetadataUserInput(page = getOpt("hdabContactPage"), email = getOpt("hdabContactEmail")),
-      note = getOpt("hdabNote"),
-      trusted = getBool("hdabTrusted")
+    val hdabRef = orgRef("datasetHdabOrg", "Dataset HDAB").getOrElse(
+      throw new IllegalArgumentException(
+        "Health Data Access Body is required: pick an organisation from the Organizations section."
+      )
     )
 
     MetadataUserInput(
+      organizations = organizations,
       catalog = CatalogMetadataUserInput(
         existing = getBool("existingCatalog"),
         uri = getOpt("catalogUri"),
@@ -434,7 +500,9 @@ object MetadataUserInput {
         description = getOpt("catalogDescription"),
         applicableLegislation = getOpt("catalogApplicableLegislation"),
         geographicalCoverage = getOpt("catalogSpatial").map(Seq(_)),
-        temporalCoverage = None // Handled dynamically via FHIR stats
+        temporalCoverage = None, // Handled dynamically via FHIR stats
+        publisherRef = orgRef("catalogPublisherOrg", "Catalog publisher"),
+        creatorRef = orgRef("catalogCreatorOrg", "Catalog creator")
       ),
       dataset = DatasetMetadataUserInput(
         title = getOpt("title"),
@@ -445,8 +513,9 @@ object MetadataUserInput {
         theme = getOpt("theme"),
         provenance = getOpt("provenance"),
         contactPoint = ContactPointMetadataUserInput(page = getOpt("contactPage"), email = getOpt("contactEmail")),
-        hdab = hdab,
-        publisher = publisher,
+        publisherRef = orgRef("datasetPublisherOrg", "Dataset publisher"),
+        creatorRef = orgRef("datasetCreatorOrg", "Dataset creator"),
+        hdabRef = Some(hdabRef),
         keyword = getOpt("keyword").map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq),
         spatial = getOpt("datasetSpatial").map(Seq(_)),
         healthCategory = getOpt("healthCategory"),
@@ -479,13 +548,119 @@ object MetadataUserInput {
 
   // --- EXCEL LOGIC ---
   /**
-   * Parses the loaded Excel Workbook into a ConfigLoader object.
-   * Extracts data from Catalog, Dataset, Distribution, and Data Dictionary sheets.
+   * Parses the "Organizations" sheet into Organization entries.
+   *
+   * Unlike the vertical Catalog/Dataset/Distribution sheets, this one is a plain table:
+   * row 0 holds the headers and each subsequent row is one organisation. Columns are located
+   * **by header name**, so authors may reorder or append columns without breaking the parser.
+   *
+   * Absent sheet -> empty registry, and every agent field falls back to its inline definition.
+   *
+   * @param wb        The active workbook.
+   * @param formatter Formatter used to render cell values (handles inline strings and numerics).
+   * @param evaluator Formula evaluator, so computed cells (e.g. authority-code lookups) resolve.
+   */
+  def parseOrganizations(
+                          wb: Workbook,
+                          formatter: DataFormatter,
+                          evaluator: org.apache.poi.ss.usermodel.FormulaEvaluator
+                        ): Seq[Organization] = {
+    val sheet = wb.getSheet("Organizations")
+    if (sheet == null) {
+      logger.info("No 'Organizations' sheet found - agent fields will use their inline definitions.")
+      return Seq.empty
+    }
+
+    def cellText(row: org.apache.poi.ss.usermodel.Row, colIdx: Int): String = {
+      if (colIdx < 0) "" else {
+        Option(row.getCell(colIdx)).map { c =>
+          evaluator.evaluate(c)
+          formatter.formatCellValue(c, evaluator).trim
+        }.getOrElse("")
+      }
+    }
+
+    def opt(row: org.apache.poi.ss.usermodel.Row, colIdx: Int): Option[String] =
+      cellText(row, colIdx).trim match {
+        case s if s.isEmpty => None
+        case s => Some(s)
+      }
+
+    val headerRow = Option(sheet.getRow(0)).getOrElse(
+      throw new IllegalArgumentException("The 'Organizations' sheet is present but has no header row.")
+    )
+
+    // Header label (normalised) -> column index
+    val headers: Map[String, Int] = (0 until headerRow.getLastCellNum.toInt).flatMap { idx =>
+      val label = OrganizationIndex.normalize(cellText(headerRow, idx))
+      if (label.isEmpty) None else Some(label -> idx)
+    }.toMap
+
+    def col(names: String*): Int =
+      names.map(OrganizationIndex.normalize).flatMap(headers.get).headOption.getOrElse(-1)
+
+    val idCol = col("organization id", "organisation id", "id")
+    val nameCol = col("name", "organization name")
+    val iriCol = col("canonical iri", "iri", "uri")
+    val typeCol = col("type")
+    val pageCol = col("contact page", "page")
+    val emailCol = col("contact email", "email")
+    val homepageCol = col("homepage", "home page")
+    val descriptionCol = col("description", "note")
+    val trustedCol = col("trusted data holder", "trusted")
+    val identifiersCol = col("other identifiers", "identifiers")
+
+    if (idCol < 0 || nameCol < 0) {
+      throw new IllegalArgumentException(
+        "The 'Organizations' sheet must have at least 'Organization ID' and 'Name' header columns."
+      )
+    }
+
+    val organizations = (1 to sheet.getLastRowNum).flatMap { rowIdx =>
+      Option(sheet.getRow(rowIdx)).flatMap { row =>
+        val id = cellText(row, idCol).trim
+        // Silently skip fully blank filler rows; a row with an id must be complete (validated below).
+        if (id.isEmpty) None
+        else Some(Organization(
+          id = id,
+          name = cellText(row, nameCol).trim,
+          iri = opt(row, iriCol),
+          `type` = opt(row, typeCol),
+          contactPoint = ContactPointMetadataUserInput(
+            page = opt(row, pageCol),
+            email = opt(row, emailCol)
+          ),
+          homepage = opt(row, homepageCol),
+          note = opt(row, descriptionCol),
+          trusted = opt(row, trustedCol).map(_.trim.toLowerCase).flatMap {
+            case "true" | "yes" | "y" | "1" => Some(true)
+            case "false" | "no" | "n" | "0" => Some(false)
+            case other =>
+              throw new IllegalArgumentException(
+                s"Organizations: invalid 'Trusted Data Holder' value '$other' for organisation '$id'. Use true or false."
+              )
+          },
+          identifiers = opt(row, identifiersCol)
+            .map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq)
+            .getOrElse(Seq.empty)
+        ))
+      }
+    }.toList
+
+    OrganizationRegistry.validate(organizations)
+    logger.info("Loaded {} organisation(s) from Excel: {}", organizations.size, organizations.map(_.id).mkString(", "))
+    organizations
+  }
+
+  /**
+   * Parses the loaded Excel Workbook into a MetadataUserInput object.
+   * Extracts data from Organizations, Catalog, Dataset, Distribution, and Data Dictionary sheets.
    *
    * @param wb The active Excel Workbook instance.
-   * @return A fully populated ConfigLoader instance based on Excel inputs.
+   * @param shared Catalog + organisations carried over from the first job of a multi-job run.
+   * @return A fully populated MetadataUserInput instance based on Excel inputs.
    */
-  def fromExcel(wb: Workbook, jobName: String = "", sharedCatalog: Option[CatalogMetadataUserInput] = None): MetadataUserInput = {
+  def fromExcel(wb: Workbook, jobName: String = "", shared: Option[SharedMetadata] = None): MetadataUserInput = {
     def toStringOption(str: String) = str.trim match {
       case s if s.isEmpty => None
       case s => Some(s)
@@ -535,6 +710,26 @@ object MetadataUserInput {
 
     def getFormattedOption(sheet: org.apache.poi.ss.usermodel.Sheet, rowIdx: Int) = toStringOption(getCellStr(sheet, rowIdx))
 
+    // Organisations are entered once and shared by every job of a multi-job run, like the Catalog.
+    val organizations: Seq[Organization] =
+      shared.map(_.organizations).getOrElse(parseOrganizations(wb, formatter, evaluator))
+    val orgIndex = new OrganizationIndex(organizations)
+
+    /**
+     * Resolves an agent cell against the Organizations sheet. Agent details live there and nowhere
+     * else, so a value that matches no entry is a configuration error rather than a literal name.
+     */
+    def resolveOrgRef(value: Option[String], field: String): Option[String] = value.map { ref =>
+      val known = if (orgIndex.nonEmpty) s" Known ids: ${orgIndex.ids.mkString(", ")}." else " The 'Organizations' sheet is empty or missing."
+      val org = orgIndex.lookup(ref).getOrElse(
+        throw new IllegalArgumentException(
+          s"$field refers to '$ref', which is not defined on the 'Organizations' sheet.$known"
+        )
+      )
+      logger.info("{} -> organisation '{}'", field, org.id)
+      org.id
+    }
+
     // Validations
     if (datasetSheet == null) {
       val sheetName = if (jobName.nonEmpty) s"Dataset-${jobName.toUpperCase} or Dataset" else "Dataset"
@@ -546,24 +741,26 @@ object MetadataUserInput {
     }
 
     // Reuse sharedCatalog for subsequent ones
-    val catalog: CatalogMetadataUserInput = sharedCatalog.getOrElse {
+    val catalog: CatalogMetadataUserInput = shared.map(_.catalog).getOrElse {
       if (catalogSheet == null) throw new IllegalArgumentException("Required sheet 'Catalog' not found in Excel workbook.")
 
       val existingVal = toBooleanOption(getCellStr(catalogSheet, 1), "Catalog.existing")
       val uriVal = getFormattedOption(catalogSheet, 2)
       if (existingVal.contains(true) && uriVal.isEmpty) throw new IllegalArgumentException("Catalog.uri is REQUIRED when existing is true.")
 
+      // Rows 6 (creator) and 16 (publisher) hold an Organization ID from the 'Organizations' sheet.
+      val catalogCreatorRef = resolveOrgRef(getFormattedOption(catalogSheet, 6), "Catalog.creator")
+      val catalogPublisherName = getFormattedOption(catalogSheet, 16)
+      val catalogPublisherRef = resolveOrgRef(catalogPublisherName, "Catalog.publisher")
+
       CatalogMetadataUserInput(
+        creatorRef = catalogCreatorRef,
+        publisherRef = catalogPublisherRef,
         existing = existingVal,
         uri = uriVal,
         title = getFormattedOption(catalogSheet, 3),
         description = getFormattedOption(catalogSheet, 4),
         applicableLegislation = getFormattedOption(catalogSheet, 5),
-        creator = getFormattedOption(catalogSheet, 6).map(name => Agent(
-          name,
-          email = None,
-          `type` = getFormattedOption(catalogSheet, 7)
-        )),
         geographicalCoverage = getFormattedOption(catalogSheet, 8).map(_.split(",").toSeq),
         temporalCoverage = (
           getFormattedOption(catalogSheet, 9),
@@ -577,25 +774,6 @@ object MetadataUserInput {
         homepage = getFormattedOption(catalogSheet, 13),
         language = getFormattedOption(catalogSheet, 14).map(_.split(",").toSeq),
         modificationDate = getFormattedOption(catalogSheet, 15),
-        publisher = (
-          getFormattedOption(catalogSheet, 16),
-          getFormattedOption(catalogSheet, 17),
-          getFormattedOption(catalogSheet, 18)
-        ) match {
-          case (None, None, None) => None
-          case (Some(_), None, None) =>
-            throw new IllegalArgumentException("At least one of the Publisher.email or Publisher.page fields are required!")
-          case (name, _, _) if !name.exists(_.trim.nonEmpty) =>
-            throw new IllegalArgumentException("Publisher.name should be provided if any other publisher fields are given! If you don't want to provide a publisher, leave all related fields empty.")
-          case (name, page, email) =>
-            Some(Publisher(
-              name = name.get,
-              contactPoint = ContactPointMetadataUserInput(page = page, email = email),
-              `type` = getFormattedOption(catalogSheet, 19),
-              note = getFormattedOption(catalogSheet, 20),
-              trusted = toBooleanOption(getCellStr(catalogSheet, 21), "Catalog.publisher.trusted")
-            ))
-        },
         releaseDate = getFormattedOption(catalogSheet, 22),
         rights = getFormattedOption(catalogSheet, 23)
       )
@@ -605,17 +783,24 @@ object MetadataUserInput {
     val dsEmail = getFormattedOption(datasetSheet, 9)
     if (dsPage.isEmpty && dsEmail.isEmpty) throw new IllegalArgumentException("Dataset Contact Point requires at least one of page or email.")
 
-    val hdabPage = getFormattedOption(datasetSheet, 12)
-    val hdabEmail = getFormattedOption(datasetSheet, 13)
-    if (hdabPage.isEmpty && hdabEmail.isEmpty) throw new IllegalArgumentException("Dataset HDAB requires at least one of contact point page or email.")
+    // Rows 10 (HDAB), 14 (publisher) and 28 (creator) hold an Organization ID.
+    val datasetHdabRef = resolveOrgRef(getFormattedOption(datasetSheet, 10), "Dataset.hdab")
+    val datasetPublisherRef = resolveOrgRef(getFormattedOption(datasetSheet, 14), "Dataset.publisher")
+    val datasetCreatorRef = resolveOrgRef(getFormattedOption(datasetSheet, 28), "Dataset.creator")
 
-    val pubPage = getFormattedOption(datasetSheet, 15)
-    val pubEmail = getFormattedOption(datasetSheet, 16)
-    if (pubPage.isEmpty && pubEmail.isEmpty) throw new IllegalArgumentException("Dataset Publisher requires at least one of contact page or email.")
+    if (datasetHdabRef.isEmpty) {
+      throw new IllegalArgumentException(
+        "Dataset 'health data access body' is REQUIRED: put an Organization ID in its name cell."
+      )
+    }
 
     MetadataUserInput(
       catalog = catalog,
+      organizations = organizations,
       dataset = DatasetMetadataUserInput(
+        publisherRef = datasetPublisherRef,
+        creatorRef = datasetCreatorRef,
+        hdabRef = datasetHdabRef,
         title = getFormattedOption(datasetSheet, 1),
         description = getFormattedOption(datasetSheet, 2),
         identifier = getFormattedOption(datasetSheet, 3),
@@ -627,33 +812,6 @@ object MetadataUserInput {
           page = getFormattedOption(datasetSheet, 8),
           email = getFormattedOption(datasetSheet, 9)
         ),
-        hdab = HDABMetadataUserInput(
-          name = getFormattedOption(datasetSheet, 10),
-          `type` = getFormattedOption(datasetSheet, 11),
-          contactPoint = ContactPointMetadataUserInput(
-            page = getFormattedOption(datasetSheet, 12),
-            email = getFormattedOption(datasetSheet, 13)
-          )
-        ),
-        publisher = (
-          getFormattedOption(datasetSheet, 14),
-          getFormattedOption(datasetSheet, 15),
-          getFormattedOption(datasetSheet, 16)
-        ) match {
-          case (None, None, None) => None
-          case (Some(_), None, None) =>
-            throw new IllegalArgumentException("At least one of the (Dataset) Publisher.email or Publisher.page fields are required!")
-          case (name, _, _) if !name.exists(_.trim.nonEmpty) =>
-            throw new IllegalArgumentException("(Dataset) Publisher.name should be provided if any other publisher fields are given! If you don't want to provide a publisher, leave all related fields empty.")
-          case (name, page, email) =>
-            Some(Publisher(
-              name = name.get,
-              contactPoint = ContactPointMetadataUserInput(page = page, email = email),
-              `type` = getFormattedOption(datasetSheet, 17),
-              note = getFormattedOption(datasetSheet, 18),
-              trusted = toBooleanOption(getCellStr(datasetSheet, 19), "Dataset.Publisher.trusted")
-            ))
-        },
         keyword = getFormattedOption(datasetSheet, 20).map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq),
         spatial = getFormattedOption(datasetSheet, 21).map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq),
         healthCategory = getFormattedOption(datasetSheet, 22),
@@ -662,11 +820,6 @@ object MetadataUserInput {
         accessRights = getFormattedOption(datasetSheet, 25),
         healthTheme = getFormattedOption(datasetSheet, 26),
         conformsTo = getFormattedOption(datasetSheet, 27),
-        creator = getFormattedOption(datasetSheet, 28).map(name => Agent(
-          name,
-          email = None,
-          `type` = getFormattedOption(datasetSheet, 29)
-        )),
         documentation = getFormattedOption(datasetSheet, 30),
         frequency = getFormattedOption(datasetSheet, 31),
         sample = None,
@@ -767,13 +920,16 @@ object MetadataUserInput {
               minValue = toStringOption(r.getCell(16).getStringCellValue),
               maxValue = toStringOption(r.getCell(17).getStringCellValue),
               required = toStringOption(r.getCell(18).getStringCellValue),
-              conditionalOn = toStringOption(r.getCell(19).getStringCellValue)
+              conditionalOn = toStringOption(r.getCell(19).getStringCellValue),
+              // Optional column 21: ISO-8601 duration for variables re-recorded at a
+              // fixed interval (e.g. P6M). Absent cells resolve to blank (backward compatible).
+              repetitionPeriod = toStringOption(r.getCell(20).getStringCellValue)
             ))
           }
         }).toList)
       else None,
       dataDictionaryValueSets = {
-        val valueSetsSheet = resolveSheet("Value Sets")
+        val valueSetsSheet = resolveSheet("ValueSet")
         if (valueSetsSheet == null) Map.empty[String, Map[String, String]]
         else {
           val builder = mutable.LinkedHashMap.empty[String, mutable.LinkedHashMap[String, String]]

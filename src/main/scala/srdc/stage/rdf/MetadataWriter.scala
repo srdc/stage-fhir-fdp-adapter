@@ -11,6 +11,7 @@ import srdc.stage.vocab.{ADMS, CSVW, DCATAP, DPV, HealthDCATAP, PROV}
 
 import java.nio.file.{Files, Paths}
 import java.util.UUID
+import scala.collection.mutable
 
 /**
  * Encapsulates statistical information extracted from the dataset.
@@ -77,9 +78,31 @@ object MetadataWriter {
 
   private val logger = LoggerFactory.getLogger(getClass)
 
-  private val VOCAB_BASE = "http://example.org/vocab"
+  private val DEFAULT_VOCAB_BASE = "http://stage-healthyageing.eu/fdp/vocab"
+
+  private val FREQUENCY_AUTHORITY_NS = "http://publications.europa.eu/resource/authority/frequency/"
+
+  /** ISO-8601 duration with at least one designator in the date or time part. */
+  private val ISO_DURATION_PATTERN = "^P(?!$)(\\d+Y)?(\\d+M)?(\\d+W)?(\\d+D)?(T(?!$)(\\d+H)?(\\d+M)?(\\d+S)?)?$"
+
+  /** Common repetition periods mapped to EU Publications Office frequency authority codes. */
+  private val DURATION_TO_EU_FREQUENCY = Map(
+    "P1D" -> "DAILY",
+    "P1W" -> "WEEKLY", "P7D" -> "WEEKLY",
+    "P2W" -> "BIWEEKLY", "P14D" -> "BIWEEKLY",
+    "P1M" -> "MONTHLY",
+    "P2M" -> "BIMONTHLY",
+    "P3M" -> "QUARTERLY",
+    "P6M" -> "ANNUAL_2",
+    "P1Y" -> "ANNUAL", "P12M" -> "ANNUAL",
+    "P2Y" -> "BIENNIAL",
+    "P3Y" -> "TRIENNIAL",
+    "P5Y" -> "QUINQUENNIAL",
+    "P10Y" -> "DECENNIAL"
+  )
   private val ELI_NS = "http://data.europa.eu/eli/ontology#"
   private val DQV_NS = "http://www.w3.org/ns/dqv#"
+  private val OWL_NS = "http://www.w3.org/2002/07/owl#"
 
   private val MEDIA_TYPE_EXTENT = "http://purl.org/dc/terms/MediaTypeOrExtent"
   private val MEDIA_TYPE = "http://purl.org/dc/terms/MediaType"
@@ -108,6 +131,7 @@ object MetadataWriter {
     m.setNsPrefix("adms", ADMS.NS)
     m.setNsPrefix("eli", ELI_NS)
     m.setNsPrefix("dqv", DQV_NS)
+    m.setNsPrefix("owl", OWL_NS)
     m
   }
 
@@ -135,6 +159,86 @@ object MetadataWriter {
   }
 
   /**
+   * Emits agents (publishers, creators, HDABs, attribution agents, rights holders) into a single model.
+   *
+   * Organisations resolve to a **named node** carrying a stable IRI, so every reference within the graph
+   * collapses onto one entity; anything not backed by an organisation keeps the historical blank node.
+   *
+   * @param m  The model the agents are emitted into.
+   * @param registry The organisation registry resolved from the metadata input.
+   */
+  private class AgentEmitter(m: Model, registry: OrganizationRegistry) {
+
+    private val cache = mutable.Map.empty[String, Resource]
+
+    /**
+     * @param agent          The agent to emit.
+     * @param extraTypes     Additional rdf:type values (e.g. the HDAB class).
+     * @param requireContact Force a dcat:contactPoint even when no page/email is known - required by
+     *                       :PublisherShape and :HDABShape, which demand at least one.
+     */
+    def emit(agent: AgentDescription, extraTypes: Seq[Resource] = Seq.empty, requireContact: Boolean = false): Resource = {
+      val key = agent.iri.map(_.trim).filter(_.nonEmpty).getOrElse("")
+      val node = if (key.nonEmpty) cache.getOrElseUpdate(key, build(agent)) else build(agent)
+
+      extraTypes.foreach(t => node.addProperty(RDF.`type`, t))
+      if (requireContact && !node.hasProperty(DCAT.contactPoint)) {
+        node.addProperty(DCAT.contactPoint, m.createResource().addProperty(RDF.`type`, VCARD4.Kind))
+      }
+      node
+    }
+
+    /** Resolves an organisation reference. Unknown references are a configuration error. */
+    def resolve(ref: Option[String], field: String): Option[AgentDescription] = ref.map { r =>
+      registry.resolve(r).getOrElse(throw new IllegalArgumentException(
+        s"$field refers to organisation '$r', which is not defined. Known ids: ${registry.ids.mkString(", ")}."
+      ))
+    }
+
+    /**
+     * Resolves a data dictionary agent (dataOwner / responsible). These columns come from the
+     * cohort's own dictionary rather than the metadata sheets, so a name that matches no
+     * organisation is kept as a plain named agent instead of failing the run.
+     */
+    def resolveDictionaryAgent(name: String): AgentDescription =
+      registry.resolve(name).getOrElse(AgentDescription.literal(name))
+
+    private def build(agent: AgentDescription): Resource = {
+      val node = agent.iri.map(uri => safeRes(m, uri)).getOrElse(m.createResource())
+      node.addProperty(RDF.`type`, FOAF.Agent)
+      node.addProperty(FOAF.name, agent.name)
+      agent.`type`.foreach(t => node.addProperty(DCTerms.`type`, safeRes(m, t)))
+      agent.note.foreach(n => node.addProperty(DCTerms.description, n))
+      agent.trusted.foreach(t => node.addLiteral(HealthDCATAP.trustedDataHolder, t))
+      // Skipped when the homepage IS the agent's own IRI (a common case, since a homepage is a
+      // reasonable canonical IRI). Emitting it would type the organisation as a foaf:Document and
+      // leave a self-referential foaf:homepage.
+      agent.homepage.foreach { h =>
+        val page = safeRes(m, h)
+        if (page != node) {
+          page.addProperty(RDF.`type`, FOAF.Document)
+          node.addProperty(FOAF.homepage, page)
+        }
+      }
+
+      agent.identifiers.map(_.trim).filter(_.nonEmpty).foreach { id =>
+        node.addProperty(DCTerms.identifier, id)
+        // Dereferenceable identifiers double as owl:sameAs links, so a minted IRI stays joinable
+        // with the organisation's ROR / Wikidata entity.
+        if (id.contains("://")) node.addProperty(m.createProperty(OWL_NS + "sameAs"), safeRes(m, id))
+      }
+
+      if (agent.contactPoint.page.isDefined || agent.contactPoint.email.isDefined) {
+        val contact = m.createResource().addProperty(RDF.`type`, VCARD4.Kind)
+        agent.contactPoint.email.foreach(e => contact.addProperty(VCARD4.hasEmail, safeRes(m, s"mailto:$e")))
+        agent.contactPoint.page.foreach(p => contact.addProperty(VCARD4.hasURL, safeRes(m, p)))
+        node.addProperty(DCAT.contactPoint, contact)
+      }
+      node
+    }
+  }
+
+  /**
    * Main orchestration method for exporting metadata.
    *
    * This method manages the lifecycle of metadata creation:
@@ -156,11 +260,16 @@ object MetadataWriter {
    * @param sharedCatalogUri An optional URI to reuse an existing Catalog across multiple jobs.
    * @return The URI of the Catalog used or created.
    */
-  def exportResults(outputDir: String, fdpUrl: String, fdpEmail: String, fdpPassword: String, meta: MetadataUserInput, jobStats: DatasetStats, globalStats: DatasetStats, runMode: String, sharedCatalogUri: Option[String] = None, isFhirConfigured: Boolean = true): String = {
+  def exportResults(outputDir: String, fdpUrl: String, fdpEmail: String, fdpPassword: String, meta: MetadataUserInput, jobStats: DatasetStats, globalStats: DatasetStats, runMode: String, sharedCatalogUri: Option[String] = None, isFhirConfigured: Boolean = true, vocabBase: String = DEFAULT_VOCAB_BASE): String = {
     logger.info("Starting Metadata Export...")
 
     val isFdpMode = fdpUrl.trim.nonEmpty && fdpEmail.trim.nonEmpty
     val outDir = Paths.get(outputDir)
+
+    val registry = OrganizationRegistry(meta.organizations, vocabBase)
+    if (registry.nonEmpty) {
+      logger.info("Organisation registry active ({}): {}", registry.ids.size, registry.ids.mkString(", "))
+    }
 
     if (isFdpMode) {
       logger.info("FDP Mode ACTIVE. Target: {}", fdpUrl)
@@ -181,7 +290,7 @@ object MetadataWriter {
         configuredCatalogUri
       } else if (isFdpMode) {
         logger.info("Creating NEW Catalog on FDP...")
-        val model = createCatalogModel(meta, globalStats, "", isFdpMode, fdpUrl, runMode)
+        val model = createCatalogModel(meta, globalStats, "", isFdpMode, fdpUrl, runMode, registry)
         val loc = postToFdp(fdpUrl, fdpEmail, fdpPassword, "catalog", model)
         logger.info("Catalog confirmed at: {}", loc)
         loc
@@ -191,19 +300,19 @@ object MetadataWriter {
         uri
       }
     }
-    saveLocalFile(outputDir, "Catalog", createCatalogModel(meta, globalStats, finalCatalogUri, isFdpMode, fdpUrl, runMode))
+    saveLocalFile(outputDir, "Catalog", createCatalogModel(meta, globalStats, finalCatalogUri, isFdpMode, fdpUrl, runMode, registry))
 
     // 2. Dataset (Uses Job-Specific Stats)
     val finalDatasetUri = if (isFdpMode) {
       logger.info("Creating NEW Dataset on FDP...")
-      val datasetModel = createDatasetModel(meta, jobStats, finalCatalogUri, "", runMode)
+      val datasetModel = createDatasetModel(meta, jobStats, finalCatalogUri, "", runMode, registry)
       val loc = postToFdp(fdpUrl, fdpEmail, fdpPassword, "dataset", datasetModel)
       logger.info("Dataset created at: {}", loc)
       loc
     } else {
       s"urn:uuid:${UUID.randomUUID()}"
     }
-    saveLocalFile(outputDir, "Dataset", createDatasetModel(meta, jobStats, finalCatalogUri, finalDatasetUri, runMode))
+    saveLocalFile(outputDir, "Dataset", createDatasetModel(meta, jobStats, finalCatalogUri, finalDatasetUri, runMode, registry))
 
     // 3. Main Distribution
     logger.info("Preparing Distribution (Linking to Parent Dataset: {})...", finalDatasetUri)
@@ -222,9 +331,9 @@ object MetadataWriter {
     // 4. CSVW
     val initialCsvwUri = if (isFdpMode) "" else s"urn:uuid:${UUID.randomUUID()}"
     val csvwModel = if (isFhirConfigured) {
-      val model = createCsvwModel(jobStats, initialCsvwUri, finalDistUri)
+      val model = createCsvwModel(jobStats, initialCsvwUri, finalDistUri, vocabBase)
       if (jobStats.vocabularies.nonEmpty) {
-        model.add(createConceptSchemes(jobStats))
+        model.add(createConceptSchemes(jobStats, vocabBase))
       }
       model
     } else {
@@ -236,7 +345,9 @@ object MetadataWriter {
         fields = fields,
         vocabularies = meta.dataDictionaryValueSets,
         subjectUri = initialCsvwUri,
-        parentDistributionUri = finalDistUri
+        parentDistributionUri = finalDistUri,
+        vocabBase = vocabBase,
+        registry = registry
       )
     }
 
@@ -295,7 +406,7 @@ object MetadataWriter {
    * @param runMode    The current application run mode.
    * @return A populated Jena Model.
    */
-  private def createCatalogModel(meta: MetadataUserInput, stats: DatasetStats, subjectUri: String, isFdpMode: Boolean, fdpUrl: String, runMode: String): Model = {
+  private def createCatalogModel(meta: MetadataUserInput, stats: DatasetStats, subjectUri: String, isFdpMode: Boolean, fdpUrl: String, runMode: String, registry: OrganizationRegistry): Model = {
     val m = createModel()
     val catalog = createSubject(m, subjectUri).addProperty(RDF.`type`, DCAT.Catalog)
 
@@ -327,26 +438,14 @@ object MetadataWriter {
     meta.catalog.rights.foreach(r => catalog.addProperty(DCTerms.rights, m.createResource().addProperty(RDF.`type`, DCTerms.RightsStatement).addProperty(DCTerms.description, r)))
     meta.catalog.language.foreach(langs => langs.foreach(l => catalog.addProperty(DCTerms.language, safeRes(m, l).addProperty(RDF.`type`, DCTerms.LinguisticSystem))))
 
-    meta.catalog.creator.foreach { c =>
-      val creator = m.createResource().addProperty(RDF.`type`, FOAF.Agent)
-      creator.addProperty(FOAF.name, c.name)
-      c.`type`.foreach(t => creator.addProperty(DCTerms.`type`, safeRes(m, t)))
-      catalog.addProperty(DCTerms.creator, creator)
-    }
+    val agents = new AgentEmitter(m, registry)
 
-    meta.catalog.publisher.foreach { p =>
-      val publisher = m.createResource().addProperty(RDF.`type`, FOAF.Agent)
-      publisher.addProperty(FOAF.name, p.name)
-      p.trusted.foreach(t => publisher.addLiteral(HealthDCATAP.trustedDataHolder, t))
-      p.`type`.foreach(t => publisher.addProperty(DCTerms.`type`, safeRes(m, t)))
+    // :AgentShape requires foaf:name and the Catalog shape adds sh:class foaf:Agent on both paths.
+    agents.resolve(meta.catalog.creatorRef, "Catalog.creator")
+      .foreach(creator => catalog.addProperty(DCTerms.creator, agents.emit(creator)))
 
-      val contact = m.createResource().addProperty(RDF.`type`, VCARD4.Kind)
-      p.contactPoint.email.foreach(e => contact.addProperty(VCARD4.hasEmail, safeRes(m, s"mailto:$e")))
-      p.contactPoint.page.foreach(page => contact.addProperty(VCARD4.hasURL, safeRes(m, page)))
-      publisher.addProperty(DCAT.contactPoint, contact)
-
-      catalog.addProperty(DCTerms.publisher, publisher)
-    }
+    agents.resolve(meta.catalog.publisherRef, "Catalog.publisher")
+      .foreach(publisher => catalog.addProperty(DCTerms.publisher, agents.emit(publisher, requireContact = true)))
 
     if (isFdpMode && fdpUrl.nonEmpty) catalog.addProperty(DCTerms.isPartOf, safeRes(m, fdpUrl))
     m
@@ -422,7 +521,7 @@ object MetadataWriter {
    * @param runMode    The active run mode defining dynamic fallback behavior.
    * @return A populated Jena Model.
    */
-  private def createDatasetModel(meta: MetadataUserInput, stats: DatasetStats, catalogUri: String, subjectUri: String, runMode: String): Model = {
+  private def createDatasetModel(meta: MetadataUserInput, stats: DatasetStats, catalogUri: String, subjectUri: String, runMode: String, registry: OrganizationRegistry): Model = {
     val m = createModel()
     val dataset = createSubject(m, subjectUri)
       .addProperty(RDF.`type`, DCAT.Dataset)
@@ -484,27 +583,14 @@ object MetadataWriter {
     dataset.addLiteral(HealthDCATAP.minTypicalAge, m.createTypedLiteral(minA, XSDDatatype.XSDnonNegativeInteger))
     dataset.addLiteral(HealthDCATAP.maxTypicalAge, m.createTypedLiteral(maxA, XSDDatatype.XSDnonNegativeInteger))
 
-    meta.dataset.publisher.foreach { p =>
-      val pub = m.createResource().addProperty(RDF.`type`, FOAF.Agent).addProperty(FOAF.name, p.name)
-      p.trusted.foreach(t => pub.addLiteral(HealthDCATAP.trustedDataHolder, t))
-      p.`type`.foreach(t => pub.addProperty(DCTerms.`type`, safeRes(m, t)))
-      p.note.foreach(n => pub.addProperty(DCTerms.description, n))
-      val pubContact = m.createResource().addProperty(RDF.`type`, VCARD4.Kind)
-      p.contactPoint.email.foreach(e => pubContact.addProperty(VCARD4.hasEmail, safeRes(m, s"mailto:$e")))
-      p.contactPoint.page.foreach(p => pubContact.addProperty(VCARD4.hasURL, safeRes(m, p)))
-      pub.addProperty(DCAT.contactPoint, pubContact)
-      dataset.addProperty(DCTerms.publisher, pub)
-    }
+    val agents = new AgentEmitter(m, registry)
 
-    val hdab = m.createResource().addProperty(RDF.`type`, FOAF.Agent)
-    meta.dataset.hdab.name.foreach(hdab.addProperty(FOAF.name, _))
-    meta.dataset.hdab.trusted.foreach(t => hdab.addLiteral(HealthDCATAP.trustedDataHolder, t))
-    meta.dataset.hdab.`type`.foreach(t => hdab.addProperty(DCTerms.`type`, safeRes(m, t)))
-    val hdabContact = m.createResource().addProperty(RDF.`type`, VCARD4.Kind)
-    meta.dataset.hdab.contactPoint.email.foreach(e => hdabContact.addProperty(VCARD4.hasEmail, safeRes(m, s"mailto:$e")))
-    meta.dataset.hdab.contactPoint.page.foreach(p => hdabContact.addProperty(VCARD4.hasURL, safeRes(m, p)))
-    hdab.addProperty(DCAT.contactPoint, hdabContact)
-    dataset.addProperty(HealthDCATAP.hdab, hdab)
+    // :PublisherShape and :HDABShape both require foaf:name and exactly one dcat:contactPoint.
+    agents.resolve(meta.dataset.publisherRef, "Dataset.publisher")
+      .foreach(publisher => dataset.addProperty(DCTerms.publisher, agents.emit(publisher, requireContact = true)))
+
+    agents.resolve(meta.dataset.hdabRef, "Dataset.hdab")
+      .foreach(hdabAgent => dataset.addProperty(HealthDCATAP.hdab, agents.emit(hdabAgent, requireContact = true)))
 
     // --- OPTIONALS ---
     meta.dataset.conformsTo.foreach(c => dataset.addProperty(DCTerms.conformsTo, safeRes(m, c).addProperty(RDF.`type`, DCTerms.Standard)))
@@ -544,8 +630,9 @@ object MetadataWriter {
 
     meta.dataset.qualifiedAttribution.foreach(_.foreach { qa =>
       val attr = m.createResource().addProperty(RDF.`type`, PROV.Attribution)
-      val agent = m.createResource().addProperty(RDF.`type`, FOAF.Agent).addProperty(FOAF.name, qa.name)
-      attr.addProperty(PROV.agent, agent)
+      // The attribution's name cell holds an Organization ID.
+      attr.addProperty(PROV.agent, agents.emit(
+        agents.resolve(Some(qa.name), "Dataset.qualifiedAttribution").get))
       qa.role.foreach(r => attr.addProperty(DCAT.hadRole, safeRes(m, r)))
       dataset.addProperty(PROV.qualifiedAttribution, attr)
     })
@@ -556,12 +643,8 @@ object MetadataWriter {
     meta.dataset.wasGeneratedBy.foreach(_.foreach(wg => dataset.addProperty(PROV.wasGeneratedBy, safeRes(m, wg).addProperty(RDF.`type`, PROV.Activity))))
     meta.dataset.purpose.foreach(p => dataset.addProperty(DPV.hasPurpose, p))
 
-    meta.dataset.creator.foreach { c =>
-      val creator = m.createResource().addProperty(RDF.`type`, FOAF.Agent).addProperty(FOAF.name, c.name)
-      c.`type`.foreach(t => creator.addProperty(DCTerms.`type`, safeRes(m, t)))
-      c.email.foreach(e => creator.addProperty(VCARD4.hasEmail, safeRes(m, s"mailto:$e")))
-      dataset.addProperty(DCTerms.creator, creator)
-    }
+    agents.resolve(meta.dataset.creatorRef, "Dataset.creator")
+      .foreach(creator => dataset.addProperty(DCTerms.creator, agents.emit(creator)))
 
     meta.dataset.sample.foreach { s =>
       val sample = m.createResource().addProperty(RDF.`type`, DCAT.Distribution)
@@ -585,9 +668,10 @@ object MetadataWriter {
    * @param stats      DatasetStats containing the column definitions extracted from the dataframe.
    * @param subjectUri The URI assigned to the CSVW Resource by the FDP server.
    * @param parentUri  The URI of the parent Distribution (for dct:isPartOf linking).
+   * @param vocabBase  Base URI for csvw:propertyUrl values.
    * @return A populated Jena Model representing the CSVW schema.
    */
-  private def createCsvwModel(stats: DatasetStats, subjectUri: String, parentUri: String): Model = {
+  private def createCsvwModel(stats: DatasetStats, subjectUri: String, parentUri: String, vocabBase: String): Model = {
     val m = createModel()
 
     val tableGroup = createSubject(m, subjectUri)
@@ -620,7 +704,7 @@ object MetadataWriter {
         val shortId = stats.columnToVocabId(colName)
         if (stats.vocabularies.contains(shortId)) {
           val propertyUrlPredicate = m.createProperty("http://www.w3.org/ns/csvw#propertyUrl")
-          col.addProperty(propertyUrlPredicate, m.createResource(s"$VOCAB_BASE/$shortId"))
+          col.addProperty(propertyUrlPredicate, m.createResource(s"$vocabBase/$shortId"))
         }
       }
 
@@ -642,12 +726,13 @@ object MetadataWriter {
    * This maps raw codes (from FHIR Questionnaires) to human-readable display labels.
    *
    * @param stats DatasetStats containing the extracted vocabularies map.
+   * @param vocabBase Base URI for the emitted SKOS scheme URIs.
    * @return A populated Jena Model containing SKOS Concept Schemes.
    */
-  private def createConceptSchemes(stats: DatasetStats): Model = {
+  private def createConceptSchemes(stats: DatasetStats, vocabBase: String): Model = {
     val m = createModel()
     stats.vocabularies.foreach { case (colName, options) =>
-      val schemeUri = s"$VOCAB_BASE/$colName"
+      val schemeUri = s"$vocabBase/$colName"
       val scheme = m.createResource(schemeUri).addProperty(RDF.`type`, SKOS.ConceptScheme).addProperty(DCTerms.title, s"Vocabulary for $colName")
       options.foreach { case (code, display) =>
         val concept = m.createResource(s"$schemeUri/$code")
@@ -669,9 +754,10 @@ object MetadataWriter {
    * Used by the "dictionary" job to produce a Dictionary.ttl without requiring any FHIR extraction or Dataset/Distribution context.
    * @param fields The list of CsvwField entries parsed from the Data Dictionary Excel sheet.
    * @param vocabularies Map of variable name to its code -> display pairs from Value Sets sheet.
+   * @param vocabBase Base URI used for emitted SKOS scheme + concept URIs.
    * @return A populated Jena Model representing the dictionary as a CSVW schema with SKOS vocabularies.
    */
-  def createDictionaryModel(fields: List[CsvwField], vocabularies: Map[String, Map[String, String]] = Map.empty, subjectUri: String = "", parentDistributionUri: String = ""): Model = {
+  def createDictionaryModel(fields: List[CsvwField], vocabularies: Map[String, Map[String, String]] = Map.empty, subjectUri: String = "", parentDistributionUri: String = "", vocabBase: String = DEFAULT_VOCAB_BASE, registry: OrganizationRegistry = OrganizationRegistry.empty(DEFAULT_VOCAB_BASE)): Model = {
     val m = createModel()
     val qudtUnit = m.createProperty("http://qudt.org/schema/qudt/unit")
 
@@ -684,6 +770,8 @@ object MetadataWriter {
     val cohortFromStudy = m.createProperty(COHORT_NS + "fromStudy")
 
     val responsibleRole = m.createResource("http://example.org/cohort/role/responsible")
+
+    val agents = new AgentEmitter(m, registry)
 
     // URI-safe slug for SKOS concept fragments (Study, Group)
     def slug(s: String): String = s.trim.replaceAll("\\s+", "_").replaceAll("[<>\"{}|\\\\^`#]", "")
@@ -703,19 +791,19 @@ object MetadataWriter {
 
     tableGroup.addProperty(CSVW.table, table)
 
-    val studyScheme = m.createResource(s"$VOCAB_BASE/study")
+    val studyScheme = m.createResource(s"$vocabBase/study")
       .addProperty(RDF.`type`, SKOS.ConceptScheme)
       .addProperty(DCTerms.title, m.createLiteral("Studies / Cohorts", "en"))
 
-    val sectionScheme = m.createResource(s"$VOCAB_BASE/section")
+    val sectionScheme = m.createResource(s"$vocabBase/section")
       .addProperty(RDF.`type`, SKOS.ConceptScheme)
       .addProperty(DCTerms.title, m.createLiteral("Variable groups / sections", "en"))
 
-    val parentGroupScheme = m.createResource(s"$VOCAB_BASE/parent-group")
+    val parentGroupScheme = m.createResource(s"$vocabBase/parent-group")
       .addProperty(RDF.`type`, SKOS.ConceptScheme)
       .addProperty(DCTerms.title, m.createLiteral("Parent groups (coarser groupings above Section)", "en"))
 
-    val selectionScheme = m.createResource(s"$VOCAB_BASE/selection")
+    val selectionScheme = m.createResource(s"$vocabBase/selection")
       .addProperty(RDF.`type`, SKOS.ConceptScheme)
       .addProperty(DCTerms.title, m.createLiteral("Variable selection / inclusion status", "en"))
 
@@ -730,8 +818,21 @@ object MetadataWriter {
       f.propertyUrl.filter(_.nonEmpty).foreach(p => col.addProperty(CSVW.propertyURL, m.createResource(p)))
       f.unit.filter(_.nonEmpty).foreach(u => col.addProperty(qudtUnit, u))
 
+      // Repetition Period -> dcat:temporalResolution
+      f.repetitionPeriod.map(_.trim.toUpperCase).filter(_.nonEmpty).foreach { period =>
+        if (period.matches(ISO_DURATION_PATTERN)) {
+          col.addProperty(DCAT.temporalResolution, m.createTypedLiteral(period, XSDDatatype.XSDduration))
+          DURATION_TO_EU_FREQUENCY.get(period).foreach { code =>
+            col.addProperty(DCTerms.accrualPeriodicity,
+              m.createResource(FREQUENCY_AUTHORITY_NS + code).addProperty(RDF.`type`, DCTerms.Frequency))
+          }
+        } else {
+          logger.warn("Invalid Repetition Period '{}' for variable '{}'; expected an ISO-8601 duration such as P6M or P1Y. Skipping.", period, f.name)
+        }
+      }
+
       f.study.filter(_.nonEmpty).foreach { s =>
-        val concept = m.createResource(s"$VOCAB_BASE/study/${slug(s)}")
+        val concept = m.createResource(s"$vocabBase/study/${slug(s)}")
           .addProperty(RDF.`type`, SKOS.Concept)
           .addProperty(SKOS.inScheme, studyScheme)
           .addProperty(SKOS.prefLabel, m.createLiteral(s, "en"))
@@ -740,7 +841,7 @@ object MetadataWriter {
       }
 
       f.group.filter(_.nonEmpty).foreach { g =>
-        val concept = m.createResource(s"$VOCAB_BASE/section/${slug(g)}")
+        val concept = m.createResource(s"$vocabBase/section/${slug(g)}")
           .addProperty(RDF.`type`, SKOS.Concept)
           .addProperty(SKOS.inScheme, sectionScheme)
           .addProperty(SKOS.prefLabel, m.createLiteral(g, "en"))
@@ -760,10 +861,7 @@ object MetadataWriter {
       }
 
       f.dataOwner.filter(_.nonEmpty).foreach { owner =>
-        val agent = m.createResource()
-          .addProperty(RDF.`type`, FOAF.Agent)
-          .addProperty(FOAF.name, owner)
-        col.addProperty(DCTerms.rightsHolder, agent)
+        col.addProperty(DCTerms.rightsHolder, agents.emit(agents.resolveDictionaryAgent(owner)))
       }
 
       f.identifier.filter(_.nonEmpty).foreach { flag =>
@@ -774,7 +872,7 @@ object MetadataWriter {
 
       // Selection -> SKOS Concept
       f.selection.filter(_.nonEmpty).foreach { s =>
-        val concept = m.createResource(s"$VOCAB_BASE/selection/${slug(s)}")
+        val concept = m.createResource(s"$vocabBase/selection/${slug(s)}")
           .addProperty(RDF.`type`, SKOS.Concept)
           .addProperty(SKOS.inScheme, selectionScheme)
           .addProperty(SKOS.prefLabel, m.createLiteral(s, "en"))
@@ -784,7 +882,7 @@ object MetadataWriter {
 
       // Parent Group -> skos:broader
       f.parentGroup.filter(_.nonEmpty).foreach { pg =>
-        val concept = m.createResource(s"$VOCAB_BASE/parent-group/${slug(pg)}")
+        val concept = m.createResource(s"$vocabBase/parent-group/${slug(pg)}")
           .addProperty(RDF.`type`, SKOS.Concept)
           .addProperty(SKOS.inScheme, parentGroupScheme)
           .addProperty(SKOS.prefLabel, m.createLiteral(pg, "en"))
@@ -797,11 +895,7 @@ object MetadataWriter {
         val attribution = m.createResource()
           .addProperty(RDF.`type`, PROV.Attribution)
           .addProperty(DCAT.hadRole, responsibleRole)
-          .addProperty(PROV.agent,
-            m.createResource()
-              .addProperty(RDF.`type`, FOAF.Agent)
-              .addProperty(FOAF.name, person)
-          )
+          .addProperty(PROV.agent, agents.emit(agents.resolveDictionaryAgent(person)))
         col.addProperty(PROV.qualifiedAttribution, attribution)
       }
 
@@ -841,7 +935,7 @@ object MetadataWriter {
 
     // Embed SKOS ConceptSchemes for variables with value sets (same pattern as createConceptSchemes)
     vocabularies.foreach { case (varName, options) =>
-      val schemeUri = s"$VOCAB_BASE/$varName"
+      val schemeUri = s"$vocabBase/$varName"
       val scheme = m.createResource(schemeUri)
         .addProperty(RDF.`type`, SKOS.ConceptScheme)
         .addProperty(DCTerms.title, s"Vocabulary for $varName")

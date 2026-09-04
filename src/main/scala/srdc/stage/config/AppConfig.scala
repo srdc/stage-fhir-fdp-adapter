@@ -22,7 +22,8 @@ case class AppConfig(
                       scope: Option[List[String]],
                       token: Option[String],
                       dateFrom: Option[String] = None,
-                      dateTo: Option[String] = None
+                      dateTo: Option[String] = None,
+                      vocabBase: String = "http://stage-healthyageing.eu/fdp/vocab"
                     )
 
 object AppConfig {
@@ -34,7 +35,7 @@ object AppConfig {
       fhirServer = if (conf.hasPath("fhirServer")) conf.getString("fhirServer") else "",
       fhirVersion = if (conf.hasPath("fhirVersion")) conf.getString("fhirVersion") else "",
       outputDir = conf.getString("outputDir"),
-      jobType = conf.getString("jobType"),
+      jobType = if (conf.hasPath("jobType")) conf.getString("jobType") else "",
       format = conf.getString("format"),
       runMode = conf.getString("runMode"),
       jsonPath = conf.getString("paths.json"),
