@@ -7,7 +7,7 @@ import org.apache.jena.datatypes.xsd.XSDDatatype
 import org.apache.jena.sparql.vocabulary.FOAF
 import org.slf4j.LoggerFactory
 import srdc.stage.util.RdfUtils
-import srdc.stage.vocab.{ADMS, CSVW, DCATAP, DPV, HealthDCATAP, PROV}
+import srdc.stage.vocab.{ADMS, CPOV, CSVW, DCATAP, DPV, DQV, GEODCATAP, HealthDCATAP, HealthDataEuNal, OA, PROV}
 
 import java.nio.file.{Files, Paths}
 import java.util.UUID
@@ -132,6 +132,9 @@ object MetadataWriter {
     m.setNsPrefix("eli", ELI_NS)
     m.setNsPrefix("dqv", DQV_NS)
     m.setNsPrefix("owl", OWL_NS)
+    m.setNsPrefix("oa", OA.NS)
+    m.setNsPrefix("geodcatap", GEODCATAP.NS)
+    m.setNsPrefix("cv", CPOV.NS)
     m
   }
 
@@ -651,6 +654,21 @@ object MetadataWriter {
 
     agents.resolve(meta.dataset.hdabRef, "Dataset.hdab")
       .foreach(hdabAgent => dataset.addProperty(HealthDCATAP.hdab, agents.emit(hdabAgent, requireContact = true)))
+
+    // geodcatap:custodian - the party responsible for holding the data, distinct from the publisher.
+    agents.resolve(meta.dataset.custodianRef, "Dataset.custodian")
+      .foreach(custodian => dataset.addProperty(GEODCATAP.custodian, agents.emit(custodian, requireContact = true)))
+
+    // dqv:hasQualityAnnotation expects a dqv:QualityCertificate pointing back at the dataset
+    Option(meta.dataset.qualityAnnotation).map(_.trim).filter(_.nonEmpty).foreach { qa =>
+      val certificate = m.createResource()
+        .addProperty(RDF.`type`, DQV.QualityCertificate)
+        .addProperty(OA.hasTarget, dataset)
+        .addProperty(OA.motivatedBy, DQV.qualityAssessment)
+      if (isAbsoluteIri(qa)) certificate.addProperty(OA.hasBody, safeRes(m, qa))
+      else certificate.addProperty(RDFS.label, m.createLiteral(qa, "en"))
+      dataset.addProperty(DQV.hasQualityAnnotation, certificate)
+    }
 
     // --- OPTIONALS ---
     meta.dataset.conformsTo.map(_.trim).filter(_.nonEmpty).foreach { c =>

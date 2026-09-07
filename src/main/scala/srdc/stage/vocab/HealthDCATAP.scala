@@ -19,4 +19,5 @@ object HealthDCATAP {
   final val numberOfUniqueIndividuals: Property = m.createProperty(NS + "numberOfUniqueIndividuals")
   final val hasVariables: Property = m.createProperty(NS + "hasVariables")
   final val hasStructuredData: Property = m.createProperty(NS + "hasStructuredData")
+  final val analytics: Property = m.createProperty(NS + "analytics")
 }
