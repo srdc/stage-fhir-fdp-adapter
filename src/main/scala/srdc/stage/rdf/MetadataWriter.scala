@@ -583,7 +583,12 @@ object MetadataWriter {
     meta.dataset.theme.foreach(t => dataset.addProperty(DCAT.theme, safeRes(m, t)))
     meta.dataset.title.foreach(dataset.addProperty(DCTerms.title, _))
     meta.dataset.description.foreach(dataset.addProperty(DCTerms.description, _))
-    meta.dataset.provenance.foreach(dataset.addProperty(DCTerms.provenance, _))
+    // dct:provenance takes a dct:ProvenanceStatement
+    meta.dataset.provenance.map(_.trim).filter(_.nonEmpty).foreach { statement =>
+      dataset.addProperty(DCTerms.provenance, m.createResource()
+        .addProperty(RDF.`type`, DCTerms.ProvenanceStatement)
+        .addProperty(RDFS.label, m.createLiteral(statement, "en")))
+    }
     meta.dataset.version.foreach(dataset.addProperty(m.createProperty("http://www.w3.org/ns/dcat#version"), _))
     meta.dataset.applicableLegislation.foreach(al => dataset.addProperty(DCATAP.applicableLegislation, safeRes(m, al).addProperty(RDF.`type`, m.createResource(LEGAL_RESOURCE))))
     meta.dataset.accessRights.foreach(ar => dataset.addProperty(DCTerms.accessRights, safeRes(m, ar).addProperty(RDF.`type`, DCTerms.RightsStatement)))
@@ -714,7 +719,21 @@ object MetadataWriter {
     meta.dataset.temporalResolution.filter(_.matches("^P.*")).foreach(tr => dataset.addProperty(DCAT.temporalResolution, m.createTypedLiteral(tr, XSDDatatype.XSDduration)))
     meta.dataset.versionNotes.foreach(vn => dataset.addProperty(ADMS.versionNotes, vn))
     meta.dataset.wasGeneratedBy.foreach(_.foreach(wg => dataset.addProperty(PROV.wasGeneratedBy, safeRes(m, wg).addProperty(RDF.`type`, PROV.Activity))))
-    meta.dataset.purpose.foreach(p => dataset.addProperty(DPV.hasPurpose, p))
+    // dpv:hasPurpose and dpv:hasLegalBasis take typed nodes carrying the text as dct:description
+    meta.dataset.purpose.map(_.trim).filter(_.nonEmpty).foreach { p =>
+      dataset.addProperty(DPV.hasPurpose, m.createResource()
+        .addProperty(RDF.`type`, DPV.Purpose)
+        .addProperty(DCTerms.description, m.createLiteral(p, "en")))
+    }
+
+    meta.dataset.legalBasis.map(_.trim).filter(_.nonEmpty).foreach { lb =>
+      val node = m.createResource()
+        .addProperty(RDF.`type`, DPV.LegalBasis)
+        .addProperty(DCTerms.description, m.createLiteral(lb, "en"))
+      meta.dataset.applicableLegislation.map(_.trim).filter(_.nonEmpty)
+        .foreach(al => node.addProperty(DCTerms.source, safeRes(m, al)))
+      dataset.addProperty(DPV.hasLegalBasis, node)
+    }
 
     agents.resolve(meta.dataset.creatorRef, "Dataset.creator")
       .foreach(creator => dataset.addProperty(DCTerms.creator, agents.emit(creator)))
@@ -728,7 +747,8 @@ object MetadataWriter {
     meta.dataset.analytics.foreach { a =>
       val analyticsDist = m.createResource().addProperty(RDF.`type`, DCAT.Distribution)
       populateDistribution(m, analyticsDist, a)
-      dataset.addProperty(DCTerms.relation, analyticsDist)
+      // Dedicated property for the analytics distribution
+      dataset.addProperty(HealthDCATAP.analytics, analyticsDist)
     }
 
     m
