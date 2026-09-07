@@ -652,9 +652,23 @@ object MetadataWriter {
     meta.dataset.documentation.foreach(d => dataset.addProperty(FOAF.page, safeRes(m, d).addProperty(RDF.`type`, FOAF.Document)))
     meta.dataset.alternative.foreach(_.foreach(a => dataset.addProperty(DCTerms.alternative, a)))
 
-    val finalCodingSystems = if (!isExcel && stats.codingSystems.nonEmpty) stats.codingSystems else meta.dataset.codingSystems.getOrElse(Seq.empty)
-    finalCodingSystems.foreach(cs => dataset.addProperty(HealthDCATAP.hasCodingSystem, safeRes(m, cs)))
-
+    // Anything without a scheme is dropped rather than being emitted as a relative IRI.
+    val candidateCodingSystems =
+      if (!isExcel && stats.codingSystems.nonEmpty) stats.codingSystems
+      else meta.dataset.codingSystems.getOrElse(Seq.empty)
+    val (usableCodingSystems, rejectedCodingSystems) =
+      candidateCodingSystems.map(_.trim).filter(_.nonEmpty).distinct.partition(isAbsoluteIri)
+    if (rejectedCodingSystems.nonEmpty) {
+      logger.warn("Ignoring {} coding system value(s) that are not absolute IRIs: {}",
+        rejectedCodingSystems.size, rejectedCodingSystems.mkString(", "))
+    }
+    val (mappedCodingSystems, unmappedCodingSystems) =
+      usableCodingSystems.map(cs => cs -> HealthDataEuNal.codingSystem(cs)).partition(_._2.isDefined)
+    if (unmappedCodingSystems.nonEmpty) {
+      logger.info("{} coding system(s) have no HealthData@EU concept and are emitted unchanged: {}",
+        unmappedCodingSystems.size, unmappedCodingSystems.map(_._1).mkString(", "))
+    }
+    (mappedCodingSystems.flatMap(_._2) ++ unmappedCodingSystems.map(_._1)).distinct.foreach(cs => dataset.addProperty(HealthDCATAP.hasCodingSystem, safeRes(m, cs).addProperty(RDF.`type`, DCTerms.Standard)))
     meta.dataset.codeValues.foreach { codes =>
       codes.foreach { cv =>
         val concept = m.createResource().addProperty(RDF.`type`, SKOS.Concept).addProperty(SKOS.notation, cv.notation).addProperty(SKOS.prefLabel, m.createLiteral(cv.label, "en"))

@@ -4,6 +4,8 @@ import io.onfhir.spark.SparkOnFhir
 import io.onfhir.spark.SparkOnFhirConversions._
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.json4s.{JArray, JObject, JString, JValue}
+import org.json4s.jackson.JsonMethods
 import org.slf4j.Logger
 import srdc.stage.config.AppConfig
 import srdc.stage.rdf.{DatasetStats, MetadataUserInput, MetadataWriter}
@@ -96,10 +98,22 @@ abstract class BaseExtraction {
       }
 
     val extractSystemsUDF = udf((jsonStr: String) => {
-      if (jsonStr == null) Seq.empty[String]
+      if (jsonStr == null || jsonStr.trim.isEmpty) Seq.empty[String]
       else {
-        val pattern = """"system"\s*:\s*"([^"]+)"""".r
-        pattern.findAllMatchIn(jsonStr).map(_.group(1)).toSeq
+        def walk(value: JValue): Seq[String] = value match {
+          case JObject(fields) =>
+            val byName = fields.toMap
+            val own = (byName.get("system"), byName.get("code")) match {
+              case (Some(JString(system)), Some(_)) => Seq(system)
+              case _ => Seq.empty[String]
+            }
+            own ++ fields.flatMap { case (_, child) => walk(child) }
+          case JArray(items) => items.flatMap(walk)
+          case _ => Seq.empty[String]
+        }
+
+        try walk(JsonMethods.parse(jsonStr))
+        catch { case _: Throwable => Seq.empty[String] }
       }
     })
 
