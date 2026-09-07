@@ -648,7 +648,13 @@ object MetadataWriter {
       .foreach(hdabAgent => dataset.addProperty(HealthDCATAP.hdab, agents.emit(hdabAgent, requireContact = true)))
 
     // --- OPTIONALS ---
-    meta.dataset.conformsTo.foreach(c => dataset.addProperty(DCTerms.conformsTo, safeRes(m, c).addProperty(RDF.`type`, DCTerms.Standard)))
+    meta.dataset.conformsTo.map(_.trim).filter(_.nonEmpty).foreach { c =>
+      val value = HealthDataEuNal.standard(c).getOrElse {
+        logger.info("dct:conformsTo value '{}' has no HealthData@EU standard concept; emitted unchanged.", c)
+        c
+      }
+      dataset.addProperty(DCTerms.conformsTo, safeRes(m, value).addProperty(RDF.`type`, DCTerms.Standard))
+    }
     meta.dataset.documentation.foreach(d => dataset.addProperty(FOAF.page, safeRes(m, d).addProperty(RDF.`type`, FOAF.Document)))
     meta.dataset.alternative.foreach(_.foreach(a => dataset.addProperty(DCTerms.alternative, a)))
 
@@ -670,10 +676,8 @@ object MetadataWriter {
     }
     (mappedCodingSystems.flatMap(_._2) ++ unmappedCodingSystems.map(_._1)).distinct.foreach(cs => dataset.addProperty(HealthDCATAP.hasCodingSystem, safeRes(m, cs).addProperty(RDF.`type`, DCTerms.Standard)))
     meta.dataset.codeValues.foreach { codes =>
-      codes.foreach { cv =>
-        val concept = m.createResource().addProperty(RDF.`type`, SKOS.Concept).addProperty(SKOS.notation, cv.notation).addProperty(SKOS.prefLabel, m.createLiteral(cv.label, "en"))
-        cv.scheme.foreach(s => concept.addProperty(SKOS.inScheme, safeRes(m, s)))
-        dataset.addProperty(HealthDCATAP.hasCodeValues, concept)
+      codes.map(_.notation.trim).filter(_.nonEmpty).distinct.foreach { notation =>
+        dataset.addProperty(HealthDCATAP.hasCodeValues, m.createLiteral(notation))
       }
     }
 
