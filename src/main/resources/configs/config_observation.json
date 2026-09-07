@@ -4,7 +4,7 @@
       "id": "SRDC",
       "name": "SRDC Software Research & Development and Consultancy Corp.",
       "iri": "https://www.srdc.com.tr",
-      "type": "http://publications.europa.eu/resource/authority/corporate-body/EUI",
+      "type": "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/publisher-type/private-company",
       "contactPoint": {
         "page": "https://www.srdc.com.tr/contact/",
         "email": "info@srdc.com.tr"
@@ -55,6 +55,7 @@
         "publisherRef": "SRDC",
         "creatorRef": "SRDC",
         "hdabRef": "SRDC",
+        "custodianRef": "SRDC",
         "keyword": [
           "fhir",
           "health data",
@@ -66,11 +67,11 @@
         "spatial": [
           "http://publications.europa.eu/resource/authority/country/TUR"
         ],
-        "healthCategory": "http://13.81.34.152:1101/resource/authority/healthcategories/EHRS",
+        "healthCategory": "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/healthcategories/EHRS",
         "datasetType": "http://publications.europa.eu/resource/authority/dataset-type/RELEASE",
         "applicableLegislation": "https://eur-lex.europa.eu/eli/reg/2025/327/oj",
         "accessRights": "http://publications.europa.eu/resource/authority/access-right/PUBLIC",
-        "healthTheme": "http://13.81.34.152:1101/resource/authority/health-theme/LIFECOURSE_HEALTH",
+        "healthTheme": "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-theme/LIFECOURSE_HEALTH",
         "frequency": "http://publications.europa.eu/resource/authority/frequency/BIMONTHLY",
         "numRecords": 2000,
         "maxAge": 20,
@@ -124,23 +125,29 @@
         "temporalResolution": "P1Y",
         "versionNotes": null,
         "wasGeneratedBy": [
-          "http://13.81.34.152:1101/resource/authority/health-activity/EHEALTH_APPLICATION",
-          "http://13.81.34.152:1101/resource/authority/health-activity/OBSERVATIONAL_DATA",
-          "http://13.81.34.152:1101/resource/authority/health-activity/SURVEILLANCE"
+          "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-activity/EHEALTH_APPLICATION",
+          "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-activity/OBSERVATIONAL_DATA",
+          "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-activity/SURVEILLANCE"
         ],
         "purpose": "The data are processed to support clinical research, FHIR-based interoperability, and population-level health analysis.",
-        "legalBasis": null,
+        "legalBasis": "Processing is carried out for scientific research in the public interest under Article 9(2)(j) GDPR, and for secondary use of electronic health data under the European Health Data Space Regulation, on the basis of the STAGE project's ethical approval and data sharing agreements.",
         "sample": {
           "accessURL": "https://www.srdc.com.tr/stage/fhir-observation-dataset/sample.csv",
           "applicableLegislation": "http://eur-lex.europa.eu/eli/reg/2025/327/oj",
           "title": "SRDC STAGE FHIR Observation Samples",
-          "format": "http://publications.europa.eu/resource/authority/file-type/CSV"
+          "format": "http://publications.europa.eu/resource/authority/file-type/CSV",
+          "description": "Illustrative sample extract of the dataset, provided for documentation and schema inspection.",
+          "availability": "http://publications.europa.eu/resource/authority/planned-availability/AVAILABLE",
+          "license": "http://creativecommons.org/licenses/by/4.0/"
         },
         "analytics": {
           "accessURL": "https://www.srdc.com.tr/stage/fhir-observation-dataset/analytics.pdf",
           "applicableLegislation": "http://eur-lex.europa.eu/eli/reg/2025/327/oj",
           "title": "SRDC STAGE FHIR Observation Dataset Analytics",
-          "format": "http://publications.europa.eu/resource/authority/file-type/PDF"
+          "format": "http://publications.europa.eu/resource/authority/file-type/PDF",
+          "description": "Aggregate analytical output derived from the dataset.",
+          "availability": "http://publications.europa.eu/resource/authority/planned-availability/AVAILABLE",
+          "license": "http://creativecommons.org/licenses/by/4.0/"
         }
       },
       "distribution": {
