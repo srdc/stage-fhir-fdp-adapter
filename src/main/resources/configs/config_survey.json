@@ -165,7 +165,7 @@
           "value": "b931c1fdf1e64022d63859a66cb8f697"
         },
         "mediaType": "https://www.iana.org/assignments/media-types/text/csv",
-        "packagingFormat": "http://publications.europa.eu/resource/authority/file-type/ZIP",
+        "packagingFormat": "http://www.iana.org/assignments/media-types/application/zip",
         "releaseDate": "2025-01-01",
         "rights": "Reuse of the data is permitted with attribution.",
         "spatialResolution": 5000.0,

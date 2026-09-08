@@ -380,6 +380,9 @@ object MetadataWriter {
     val initialCsvwUri = if (isFdpMode) "" else s"urn:uuid:${UUID.randomUUID()}"
     val localVariablesUri = if (isFdpMode) None else Some(initialCsvwUri).filter(_ => hasVariableDescription)
 
+    val initialDistUri = if (isFdpMode) "" else s"urn:uuid:${UUID.randomUUID()}"
+    val localDistributionUri = if (isFdpMode) None else Some(initialDistUri)
+
     // 2. Dataset (Uses Job-Specific Stats)
     var datasetPublished = false
     val finalDatasetUri = if (isFdpMode) {
@@ -394,11 +397,11 @@ object MetadataWriter {
       s"urn:uuid:${UUID.randomUUID()}"
     }
     saveLocalFile(outputDir, "Dataset", createDatasetModel(meta, jobStats, finalCatalogUri, finalDatasetUri,
-      runMode, registry, variablesUri = localVariablesUri, structuredData = structuredData))
+      runMode, registry, variablesUri = localVariablesUri, structuredData = structuredData,
+      distributionUri = localDistributionUri))
 
     // 3. Main Distribution
     logger.info("Preparing Distribution (Linking to Parent Dataset: {})...", finalDatasetUri)
-    val initialDistUri = if (isFdpMode) "" else s"urn:uuid:${UUID.randomUUID()}"
     val distModel = createDistributionModel(meta.distribution, finalDatasetUri, initialDistUri)
     saveLocalFile(outputDir, "Distribution", distModel)
 
@@ -576,16 +579,19 @@ object MetadataWriter {
   private def licenseDocument(m: Model, licenceUri: String): Resource = {
     val node = safeRes(m, licenceUri).addProperty(RDF.`type`, DCTerms.LicenseDocument)
     val lower = licenceUri.toLowerCase
-    val licenceType =
-      if (lower.contains("publicdomain") || lower.contains("/zero/")) "PublicDomain"
-      else if (lower.contains("by-nc")) "NonCommercialUse"
-      else if (lower.contains("by-nd")) "NoDerivativeWork"
-      else if (lower.contains("by-sa")) "ShareAlike"
-      else if (lower.contains("/by/") || lower.contains("by-4")) "Attribution"
-      else "UnknownIPR"
+    val (licenceType, licenceLabel) =
+      if (lower.contains("publicdomain") || lower.contains("/zero/")) ("PublicDomain", "Public domain")
+      else if (lower.contains("by-nc")) ("NonCommercialUse", "Non commercial use only")
+      else if (lower.contains("by-nd")) ("NoDerivativeWork", "No derivative work")
+      else if (lower.contains("by-sa")) ("ShareAlike", "Share alike")
+      else if (lower.contains("/by/") || lower.contains("by-4")) ("Attribution", "Attribution")
+      else ("UnknownIPR", "Unknown IPR")
     if (!node.hasProperty(DCTerms.`type`)) {
+      // skos:prefLabel is not decoration: any skos:Concept without one is rejected by the FDP's
+      // Resource shape, which would fail the whole publish.
       node.addProperty(DCTerms.`type`, m.createResource(ADMS_LICENCE_TYPE_NS + licenceType)
         .addProperty(RDF.`type`, SKOS.Concept)
+        .addProperty(SKOS.prefLabel, m.createLiteral(licenceLabel, "en"))
         .addProperty(SKOS.inScheme, m.createResource(ADMS_LICENCE_TYPE_SCHEME)))
     }
     node
@@ -798,7 +804,10 @@ object MetadataWriter {
       dataset.addProperty(HealthDCATAP.retentionPeriod, temp)
     }
 
-    meta.dataset.personalData.foreach(_.foreach(pd => dataset.addProperty(DPV.hasPersonalData, safeRes(m, pd))))
+    // DPV-PD terms are referenced by IRI, so the shape's dpv:PersonalData class check only passes
+    // if the graph says what they are.
+    meta.dataset.personalData.foreach(_.foreach(pd =>
+      dataset.addProperty(DPV.hasPersonalData, safeRes(m, pd).addProperty(RDF.`type`, DPV.PersonalData))))
     meta.dataset.landingPage.foreach(lp => dataset.addProperty(DCAT.landingPage, safeRes(m, lp).addProperty(RDF.`type`, FOAF.Document)))
     meta.dataset.language.foreach(l => dataset.addProperty(DCTerms.language, safeRes(m, l).addProperty(RDF.`type`, DCTerms.LinguisticSystem)))
     meta.dataset.modificationDate.filter(_.matches("\\d{4}-\\d{2}-\\d{2}")).foreach(md => dataset.addProperty(DCTerms.modified, m.createTypedLiteral(md, XSDDatatype.XSDdate)))
