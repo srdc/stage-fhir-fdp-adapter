@@ -904,8 +904,8 @@ object MetadataUserInput {
         temporalResolution = getFormattedOption(distSheet, 17),
         accessService = getFormattedOption(distSheet, 18)
       ),
-      dataDictionary = if (dataDictionarySheet != null && dataDictionarySheet.getLastRowNum > 1)
-        Some((1 until dataDictionarySheet.getLastRowNum).flatMap(row => {
+      dataDictionary = if (dataDictionarySheet != null && dataDictionarySheet.getLastRowNum >= 1)
+        Some((1 to dataDictionarySheet.getLastRowNum).flatMap(row => {
           val r = dataDictionarySheet.getRow(row)
           if (r == null) None
           else {
