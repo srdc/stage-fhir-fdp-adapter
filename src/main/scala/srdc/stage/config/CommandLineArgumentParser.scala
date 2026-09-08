@@ -117,6 +117,13 @@ object CommandLineArgumentParser {
           .text("Leave published FDP resources in DRAFT state. By default every created resource is " +
             "moved to PUBLISHED, which is also required before a resource can be updated."),
 
+        opt[String]("dataset-uri")
+          .action((x, c) => c.copy(datasetUri = Some(x.trim).filter(_.nonEmpty)))
+          .text("Attach this run's Data Dictionary to an existing Dataset instead of creating a " +
+            "new Catalog, Dataset and Distribution. Takes the Dataset's FDP URI, e.g. " +
+            "http://localhost:8080/dataset/<uuid>. Overrides dataset.existing/dataset.uri in the " +
+            "metadata configuration."),
+
         opt[String]("vocab-base")
           .action((x, c) => c.copy(vocabBase = x.trim.replaceAll("/+$", "")))
           .text("Base URI for SKOS schemes and CSVW propertyUrl values. " +

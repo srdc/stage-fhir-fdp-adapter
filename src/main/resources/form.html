@@ -139,6 +139,14 @@
 
     <h2>Dataset</h2>
     <div class="field">
+        <label>Existing?</label>
+        <input onchange="toggleExistingDataset(this.checked)" type="checkbox" name="existingDataset">
+    </div>
+    <div class="field hidden existing-dataset-field required">
+        <label>URI</label>
+        <input name="datasetUri" placeholder="http://localhost:8080/dataset/&lt;uuid&gt;">
+    </div>
+    <div class="field">
         <label>Title<i style="color: red">*</i></label>
         <input name="title" required placeholder="{{title}}">
     </div>
@@ -370,6 +378,16 @@
                 select.appendChild(option);
             });
             select.value = options.some(function (o) { return o.id === previous; }) ? previous : '';
+        });
+    }
+
+    function toggleExistingDataset(value) {
+        document.querySelectorAll(".existing-dataset-field").forEach(item => {
+            item.classList.toggle('hidden', !value);
+            item.querySelectorAll('input,textarea').forEach(input => {
+                if (value && item.classList.contains('required')) input.setAttribute('required', true)
+                else input.removeAttribute('required')
+            })
         });
     }
 

@@ -65,6 +65,8 @@ case class DistributionMetadataUserInput(
                                         )
 
 case class DatasetMetadataUserInput(
+                                     existing: Option[Boolean] = None,
+                                     uri: Option[String] = None,
                                      title: Option[String] = None,
                                      description: Option[String] = None,
                                      identifier: Option[String] = None,
@@ -184,13 +186,25 @@ object MetadataUserInput {
    * @return A fully populated ConfigLoader object.
    */
   def load(appConfig: AppConfig, jobName: String = "", shared: Option[SharedMetadata] = None): MetadataUserInput = {
-    appConfig.runMode.toLowerCase match {
+    val loaded = appConfig.runMode.toLowerCase match {
       case "json" => loadFromJson(appConfig, jobName)
       case "excel" => loadFromExcel(appConfig, jobName, shared)
       case "browser" => loadFromBrowser(appConfig, jobName, shared)
       case _      => throw new IllegalArgumentException(s"Unknown runMode: ${appConfig.runMode}")
     }
+    applyExistingDatasetOverride(loaded, appConfig)
   }
+
+  /**
+   * --dataset-uri wins over whatever the metadata configuration says
+   */
+  private def applyExistingDatasetOverride(meta: MetadataUserInput, appConfig: AppConfig): MetadataUserInput =
+    appConfig.datasetUri match {
+      case Some(uri) =>
+        logger.info("Existing Dataset requested on the command line: {}", uri)
+        meta.copy(dataset = meta.dataset.copy(existing = Some(true), uri = Some(uri)))
+      case None => meta
+    }
 
   /**
    * Loads configuration directly from a JSON file.
@@ -508,6 +522,8 @@ object MetadataUserInput {
         creatorRef = orgRef("catalogCreatorOrg", "Catalog creator")
       ),
       dataset = DatasetMetadataUserInput(
+        existing = getBool("existingDataset"),
+        uri = getOpt("datasetUri"),
         title = getOpt("title"),
         description = getOpt("description"),
         identifier = getOpt("identifier"),

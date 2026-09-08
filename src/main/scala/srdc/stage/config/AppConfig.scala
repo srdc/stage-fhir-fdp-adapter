@@ -24,7 +24,8 @@ case class AppConfig(
                       dateFrom: Option[String] = None,
                       dateTo: Option[String] = None,
                       vocabBase: String = "http://stage-healthyageing.eu/fdp/vocab",
-                      keepDrafts: Boolean = false
+                      keepDrafts: Boolean = false,
+                      datasetUri: Option[String] = None
                     )
 
 object AppConfig {

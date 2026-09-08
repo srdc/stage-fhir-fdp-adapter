@@ -296,6 +296,55 @@ object MetadataWriter {
       Files.createDirectories(outDir)
     }
 
+    // Existing dataset branch
+    if (meta.dataset.existing.contains(true)) {
+      val datasetUri = meta.dataset.uri.map(_.trim).filter(_.nonEmpty).getOrElse(
+        throw new IllegalArgumentException("Dataset.uri is REQUIRED when Dataset.existing is true.")
+      )
+      if (isFdpMode && !datasetUri.startsWith(fdpUrl)) {
+        throw new IllegalArgumentException(
+          s"Dataset.uri '$datasetUri' does not belong to the target FDP '$fdpUrl'."
+        )
+      }
+      logger.info("Existing Dataset mode: attaching a Data Dictionary to {}", datasetUri)
+
+      val csvwSubject = if (isFdpMode) "" else s"urn:uuid:${UUID.randomUUID()}"
+      val dictionaryModel = if (isFhirConfigured) {
+        val model = createCsvwModel(jobStats, csvwSubject, datasetUri, vocabBase)
+        if (jobStats.vocabularies.nonEmpty) model.add(createConceptSchemes(jobStats, vocabBase))
+        model
+      } else {
+        val fields = meta.dataDictionary.getOrElse(List.empty)
+        if (fields.isEmpty) {
+          throw new IllegalArgumentException(
+            "Existing Dataset mode needs variables: configure a FHIR server or fill the " +
+              "'Data Dictionary' sheet. An empty CSVW is rejected by the FDP."
+          )
+        }
+        createDictionaryModel(
+          fields = fields,
+          vocabularies = meta.dataDictionaryValueSets,
+          subjectUri = csvwSubject,
+          parentDatasetUri = datasetUri,
+          vocabBase = vocabBase,
+          registry = registry
+        )
+      }
+
+      saveLocalFile(outputDir, "CSVW", dictionaryModel)
+
+      if (isFdpMode) {
+        val csvwUri = postToFdp(fdpUrl, fdpEmail, fdpPassword, "csvw", dictionaryModel)
+        logger.info("CSVW created at: {}", csvwUri)
+        publish(csvwUri, fdpEmail, fdpPassword, fdpUrl, keepDrafts)
+        logger.info("Data Dictionary attached to existing Dataset {}", datasetUri)
+      } else {
+        logger.info("Data Dictionary written locally against Dataset {}", datasetUri)
+      }
+
+      return sharedCatalogUri.getOrElse("")
+    }
+
     // 1. Catalog
     val finalCatalogUri: String = sharedCatalogUri.getOrElse {
       val configuredCatalogUri = meta.catalog.uri.getOrElse("")
