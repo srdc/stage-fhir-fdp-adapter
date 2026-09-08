@@ -2,7 +2,7 @@ package srdc.stage.rdf
 
 import srdc.stage.client.FdpClient
 import org.apache.jena.rdf.model.{Model, ModelFactory, Resource}
-import org.apache.jena.vocabulary.{DCAT, DCTerms, RDF, SKOS, VCARD4, XSD}
+import org.apache.jena.vocabulary.{DCAT, DCTerms, RDF, RDFS, SKOS, VCARD4, XSD}
 import org.apache.jena.datatypes.xsd.XSDDatatype
 import org.apache.jena.sparql.vocabulary.FOAF
 import org.slf4j.LoggerFactory
@@ -190,6 +190,10 @@ object MetadataWriter {
       if (requireContact && !node.hasProperty(DCAT.contactPoint)) {
         node.addProperty(DCAT.contactPoint, m.createResource().addProperty(RDF.`type`, VCARD4.Kind))
       }
+
+      if (requireContact && !node.hasProperty(CPOV.contactPoint)) {
+        node.addProperty(CPOV.contactPoint, m.createResource().addProperty(RDF.`type`, CPOV.ContactPoint))
+      }
       node
     }
 
@@ -234,6 +238,11 @@ object MetadataWriter {
       }
 
       if (agent.contactPoint.page.isDefined || agent.contactPoint.email.isDefined) {
+        val cpovContact = m.createResource().addProperty(RDF.`type`, CPOV.ContactPoint)
+        agent.contactPoint.email.foreach(e => cpovContact.addProperty(CPOV.email, m.createLiteral(e)))
+        agent.contactPoint.page.foreach(p => cpovContact.addProperty(CPOV.contactPage, safeRes(m, p)))
+        node.addProperty(CPOV.contactPoint, cpovContact)
+
         val contact = m.createResource().addProperty(RDF.`type`, VCARD4.Kind)
         agent.contactPoint.email.foreach(e => contact.addProperty(VCARD4.hasEmail, safeRes(m, s"mailto:$e")))
         agent.contactPoint.page.foreach(p => contact.addProperty(VCARD4.hasURL, safeRes(m, p)))
