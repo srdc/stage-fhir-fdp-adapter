@@ -102,6 +102,8 @@ object MetadataWriter {
   )
   private val ELI_NS = "http://data.europa.eu/eli/ontology#"
   private val DQV_NS = "http://www.w3.org/ns/dqv#"
+  private val ADMS_LICENCE_TYPE_NS = "http://purl.org/adms/licencetype/"
+  private val ADMS_LICENCE_TYPE_SCHEME = "http://purl.org/adms/licencetype/1.0"
   private val OWL_NS = "http://www.w3.org/2002/07/owl#"
 
   private val MEDIA_TYPE_EXTENT = "http://purl.org/dc/terms/MediaTypeOrExtent"
@@ -486,7 +488,7 @@ object MetadataWriter {
 
     meta.catalog.releaseDate.filter(_.matches("\\d{4}-\\d{2}-\\d{2}")).foreach(d => catalog.addProperty(DCTerms.issued, m.createTypedLiteral(d, XSDDatatype.XSDdate)))
     meta.catalog.modificationDate.filter(_.matches("\\d{4}-\\d{2}-\\d{2}")).foreach(d => catalog.addProperty(DCTerms.modified, m.createTypedLiteral(d, XSDDatatype.XSDdate)))
-    meta.catalog.licence.foreach(l => catalog.addProperty(DCTerms.license, safeRes(m, l).addProperty(RDF.`type`, DCTerms.LicenseDocument)))
+    meta.catalog.licence.foreach(l => catalog.addProperty(DCTerms.license, licenseDocument(m, l)))
     meta.catalog.homepage.foreach(h => catalog.addProperty(FOAF.homepage, safeRes(m, h).addProperty(RDF.`type`, FOAF.Document)))
     meta.catalog.rights.foreach(r => catalog.addProperty(DCTerms.rights, m.createResource().addProperty(RDF.`type`, DCTerms.RightsStatement).addProperty(DCTerms.description, r)))
     meta.catalog.language.foreach(langs => langs.foreach(l => catalog.addProperty(DCTerms.language, safeRes(m, l).addProperty(RDF.`type`, DCTerms.LinguisticSystem))))
@@ -505,6 +507,27 @@ object MetadataWriter {
   }
 
   /**
+   * Emits a dct:LicenseDocument
+   */
+  private def licenseDocument(m: Model, licenceUri: String): Resource = {
+    val node = safeRes(m, licenceUri).addProperty(RDF.`type`, DCTerms.LicenseDocument)
+    val lower = licenceUri.toLowerCase
+    val licenceType =
+      if (lower.contains("publicdomain") || lower.contains("/zero/")) "PublicDomain"
+      else if (lower.contains("by-nc")) "NonCommercialUse"
+      else if (lower.contains("by-nd")) "NoDerivativeWork"
+      else if (lower.contains("by-sa")) "ShareAlike"
+      else if (lower.contains("/by/") || lower.contains("by-4")) "Attribution"
+      else "UnknownIPR"
+    if (!node.hasProperty(DCTerms.`type`)) {
+      node.addProperty(DCTerms.`type`, m.createResource(ADMS_LICENCE_TYPE_NS + licenceType)
+        .addProperty(RDF.`type`, SKOS.Concept)
+        .addProperty(SKOS.inScheme, m.createResource(ADMS_LICENCE_TYPE_SCHEME)))
+    }
+    node
+  }
+
+  /**
    * Helper method to map Distribution metadata parameters to an existing RDF resource.
    * Ensures SHACL compliance for formatting and node constraints.
    *
@@ -519,7 +542,7 @@ object MetadataWriter {
 
     distMeta.title.foreach(dist.addProperty(DCTerms.title, _))
     distMeta.description.foreach(dist.addProperty(DCTerms.description, _))
-    distMeta.license.foreach(lic => dist.addProperty(DCTerms.license, safeRes(m, lic).addProperty(RDF.`type`, DCTerms.LicenseDocument)))
+    distMeta.license.foreach(lic => dist.addProperty(DCTerms.license, licenseDocument(m, lic)))
     distMeta.availability.foreach(av => dist.addProperty(DCATAP.availability, safeRes(m, av)))
     distMeta.byteSize.foreach(bs => dist.addProperty(DCAT.byteSize, m.createTypedLiteral(bs.toLong, XSDDatatype.XSDnonNegativeInteger)))
 
