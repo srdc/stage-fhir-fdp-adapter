@@ -152,6 +152,9 @@ object MetadataWriter {
     if (uri == null || uri.trim.isEmpty) m.createResource("") else m.createResource(uri)
   }
 
+  private def isAbsoluteIri(value: String): Boolean =
+    value.trim.matches("^[A-Za-z][A-Za-z0-9+.\\-]*:.*")
+
   /**
    * Prevents invalid URI characters (like spaces) from breaking the Turtle Parser.
    * @param m      The Jena Model.
@@ -160,6 +163,9 @@ object MetadataWriter {
    */
   private def safeRes(m: Model, uriStr: String): Resource = {
     val cleaned = uriStr.trim.replaceAll("\\s+", "%20").replaceAll("[<>\"{}|\\\\^`]", "")
+    if (!isAbsoluteIri(cleaned)) {
+      logger.warn("'{}' is not an absolute IRI and will be resolved relative to the output file.", uriStr)
+    }
     m.createResource(cleaned)
   }
 
@@ -895,8 +901,7 @@ object MetadataWriter {
       if (stats.columnToVocabId.contains(colName)) {
         val shortId = stats.columnToVocabId(colName)
         if (stats.vocabularies.contains(shortId)) {
-          val propertyUrlPredicate = m.createProperty("http://www.w3.org/ns/csvw#propertyUrl")
-          col.addProperty(propertyUrlPredicate, m.createResource(s"$vocabBase/$shortId"))
+          col.addProperty(CSVW.propertyUrl, m.createResource(s"$vocabBase/$shortId"))
         }
       }
 
@@ -1007,7 +1012,7 @@ object MetadataWriter {
       col.addProperty(CSVW.titles, m.createLiteral(f.title, "en"))
       col.addProperty(CSVW.datatype, m.createTypedLiteral(f.datatype, XSDDatatype.XSDstring))
       f.description.foreach(d => col.addProperty(DCTerms.description, m.createLiteral(d, "en")))
-      f.propertyUrl.filter(_.nonEmpty).foreach(p => col.addProperty(CSVW.propertyURL, m.createResource(p)))
+      f.propertyUrl.filter(_.nonEmpty).foreach(p => col.addProperty(CSVW.propertyUrl, m.createResource(p)))
       f.unit.filter(_.nonEmpty).foreach(u => col.addProperty(qudtUnit, u))
 
       // Repetition Period -> dcat:temporalResolution
