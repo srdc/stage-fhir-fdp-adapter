@@ -11,4 +11,8 @@ object DPV {
   final val hasPersonalData: Property = m.createProperty(NS + "hasPersonalData")
   final val hasPurpose: Property = m.createProperty(NS + "hasPurpose")
   final val hasLegalBasis: Property = m.createProperty(NS + "hasLegalBasis")
+  /**
+   * The Data Privacy Vocabulary Personal Data module
+   */
+  final val PD_NS = "https://w3id.org/dpv/dpv-pd#"
 }

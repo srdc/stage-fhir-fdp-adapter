@@ -822,11 +822,7 @@ object MetadataWriter {
     // DPV-PD terms are referenced by IRI, so the shape's dpv:PersonalData class check only passes
     // if the graph says what they are.
     meta.dataset.personalData.foreach(_.foreach { pd =>
-      val (value, replaced) = DPV.normalisePersonalData(pd)
-      replaced.foreach(alias => logger.warn(
-        "dpv:hasPersonalData value '{}' uses '{}', which is not the DPV Personal Data module. R6 makes " +
-          "{} a MUST for this property, so the value was rewritten to '{}'.", pd, alias, DPV.PD_NS, value))
-      dataset.addProperty(DPV.hasPersonalData, safeRes(m, value).addProperty(RDF.`type`, DPV.PersonalData))
+      dataset.addProperty(DPV.hasPersonalData, safeRes(m, pd.trim).addProperty(RDF.`type`, DPV.PersonalData))
     })
     meta.dataset.landingPage.foreach(lp => dataset.addProperty(DCAT.landingPage, safeRes(m, lp).addProperty(RDF.`type`, FOAF.Document)))
     meta.dataset.language.foreach(l => dataset.addProperty(DCTerms.language, safeRes(m, l).addProperty(RDF.`type`, DCTerms.LinguisticSystem)))

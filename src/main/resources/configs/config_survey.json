@@ -107,9 +107,9 @@
           "end": "2030-01-01"
         },
         "personalData": [
-          "https://w3id.org/dpv/pd#Gender",
-          "https://w3id.org/dpv/pd#Age",
-          "https://w3id.org/dpv/pd#BirthDate"
+          "https://w3id.org/dpv/dpv-pd#Gender",
+          "https://w3id.org/dpv/dpv-pd#Age",
+          "https://w3id.org/dpv/dpv-pd#BirthDate"
         ],
         "landingPage": "https://www.srdc.com.tr/en/",
         "language": "http://publications.europa.eu/resource/authority/language/ENG",
