@@ -18,7 +18,7 @@
     "uri": null,
     "title": "SRDC STAGE FHIR Data Catalog",
     "description": "FAIRful metadata catalog for FHIR-based health datasets extracted by SRDC within the scope of STAGE",
-    "applicableLegislation": "https://eur-lex.europa.eu/eli/reg/2025/327/oj",
+    "applicableLegislation": "http://data.europa.eu/eli/reg/2025/327/oj",
     "creatorRef": "SRDC",
     "publisherRef": "SRDC",
     "geographicalCoverage": [
@@ -69,7 +69,7 @@
         ],
         "healthCategory": "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/healthcategories/EHRS",
         "datasetType": "http://publications.europa.eu/resource/authority/dataset-type/RELEASE",
-        "applicableLegislation": "https://eur-lex.europa.eu/eli/reg/2025/327/oj",
+        "applicableLegislation": "http://data.europa.eu/eli/reg/2025/327/oj",
         "accessRights": "http://publications.europa.eu/resource/authority/access-right/PUBLIC",
         "healthTheme": "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-theme/LIFECOURSE_HEALTH",
         "frequency": "http://publications.europa.eu/resource/authority/frequency/BIMONTHLY",
@@ -118,7 +118,7 @@
         "qualifiedAttribution": [
           {
             "name": "SRDC",
-            "role": "sponsor"
+            "role": "https://standards.iso.org/iso/19115/resources/Codelists/gml/CI_RoleCode.xml#sponsor"
           }
         ],
         "spatialResolution": null,
@@ -133,7 +133,7 @@
         "legalBasis": "Processing is carried out for scientific research in the public interest under Article 9(2)(j) GDPR, and for secondary use of electronic health data under the European Health Data Space Regulation, on the basis of the STAGE project's ethical approval and data sharing agreements.",
         "sample": {
           "accessURL": "https://www.srdc.com.tr/stage/fhir-survey-dataset/sample.csv",
-          "applicableLegislation": "http://eur-lex.europa.eu/eli/reg/2025/327/oj",
+          "applicableLegislation": "http://data.europa.eu/eli/reg/2025/327/oj",
           "title": "SRDC STAGE FHIR Samples",
           "format": "http://publications.europa.eu/resource/authority/file-type/CSV",
           "description": "Illustrative sample extract of the dataset, provided for documentation and schema inspection.",
@@ -142,7 +142,7 @@
         },
         "analytics": {
           "accessURL": "https://www.srdc.com.tr/stage/fhir-survey-dataset/analytics.pdf",
-          "applicableLegislation": "http://eur-lex.europa.eu/eli/reg/2025/327/oj",
+          "applicableLegislation": "http://data.europa.eu/eli/reg/2025/327/oj",
           "title": "SRDC STAGE FHIR Dataset Analytics",
           "format": "http://publications.europa.eu/resource/authority/file-type/PDF",
           "description": "Aggregate analytical output derived from the dataset.",
@@ -152,7 +152,7 @@
       },
       "distribution": {
         "accessURL": "https://www.srdc.com.tr/stage/fhir-survey-dataset/distribution",
-        "applicableLegislation": "https://eur-lex.europa.eu/eli/reg/2025/327/oj",
+        "applicableLegislation": "http://data.europa.eu/eli/reg/2025/327/oj",
         "format": "http://publications.europa.eu/resource/authority/file-type/CSV",
         "title": "SRDC STAGE FHIR Main Distribution",
         "description": "The primary FHIR-based dataset distribution provided by SRDC.",
@@ -203,7 +203,7 @@
         ],
         "healthCategory": "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/healthcategories/EHRS",
         "datasetType": "http://publications.europa.eu/resource/authority/dataset-type/RELEASE",
-        "applicableLegislation": "https://eur-lex.europa.eu/eli/reg/2025/327/oj",
+        "applicableLegislation": "http://data.europa.eu/eli/reg/2025/327/oj",
         "accessRights": "http://publications.europa.eu/resource/authority/access-right/PUBLIC",
         "healthTheme": "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-theme/LIFECOURSE_HEALTH",
         "frequency": "http://publications.europa.eu/resource/authority/frequency/BIMONTHLY",
@@ -252,7 +252,7 @@
         "qualifiedAttribution": [
           {
             "name": "SRDC",
-            "role": "sponsor"
+            "role": "https://standards.iso.org/iso/19115/resources/Codelists/gml/CI_RoleCode.xml#sponsor"
           }
         ],
         "spatialResolution": null,
@@ -267,7 +267,7 @@
         "legalBasis": "Processing is carried out for scientific research in the public interest under Article 9(2)(j) GDPR, and for secondary use of electronic health data under the European Health Data Space Regulation, on the basis of the STAGE project's ethical approval and data sharing agreements.",
         "sample": {
           "accessURL": "https://www.srdc.com.tr/stage/fhir-observation-dataset/sample.csv",
-          "applicableLegislation": "http://eur-lex.europa.eu/eli/reg/2025/327/oj",
+          "applicableLegislation": "http://data.europa.eu/eli/reg/2025/327/oj",
           "title": "SRDC STAGE FHIR Observation Samples",
           "format": "http://publications.europa.eu/resource/authority/file-type/CSV",
           "description": "Illustrative sample extract of the dataset, provided for documentation and schema inspection.",
@@ -276,7 +276,7 @@
         },
         "analytics": {
           "accessURL": "https://www.srdc.com.tr/stage/fhir-observation-dataset/analytics.pdf",
-          "applicableLegislation": "http://eur-lex.europa.eu/eli/reg/2025/327/oj",
+          "applicableLegislation": "http://data.europa.eu/eli/reg/2025/327/oj",
           "title": "SRDC STAGE FHIR Observation Dataset Analytics",
           "format": "http://publications.europa.eu/resource/authority/file-type/PDF",
           "description": "Aggregate analytical output derived from the dataset.",
@@ -286,7 +286,7 @@
       },
       "distribution": {
         "accessURL": "https://www.srdc.com.tr/stage/fhir-observation-dataset/distribution",
-        "applicableLegislation": "https://eur-lex.europa.eu/eli/reg/2025/327/oj",
+        "applicableLegislation": "http://data.europa.eu/eli/reg/2025/327/oj",
         "format": "http://publications.europa.eu/resource/authority/file-type/CSV",
         "title": "SRDC STAGE FHIR Observation Distribution",
         "description": "Distribution of clinical observation data extracted from FHIR Observation resources by SRDC.",

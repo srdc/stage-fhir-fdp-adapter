@@ -373,12 +373,12 @@
             select.innerHTML = '';
             var none = document.createElement('option');
             none.value = '';
-            none.textContent = options.length ? '— none / enter manually —' : '— no organizations defined —';
+            none.textContent = options.length ? '- none / enter manually -' : '- no organizations defined -';
             select.appendChild(none);
             options.forEach(function (o) {
                 var option = document.createElement('option');
                 option.value = o.id;
-                option.textContent = o.name ? (o.id + ' — ' + o.name) : o.id;
+                option.textContent = o.name ? (o.id + ' - ' + o.name) : o.id;
                 select.appendChild(option);
             });
             select.value = options.some(function (o) { return o.id === previous; }) ? previous : '';
