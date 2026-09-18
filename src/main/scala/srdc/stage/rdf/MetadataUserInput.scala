@@ -845,8 +845,22 @@ object MetadataUserInput {
         conformsTo = getFormattedOption(datasetSheet, 27),
         documentation = getFormattedOption(datasetSheet, 30),
         frequency = getFormattedOption(datasetSheet, 31),
-        sample = None,
-        analytics = None,
+        sample = getFormattedOption(datasetSheet, 32).map { url =>
+          DistributionMetadataUserInput(
+            accessURL = Some(url),
+            applicableLegislation = getFormattedOption(datasetSheet, 33),
+            title = getFormattedOption(datasetSheet, 34),
+            format = getFormattedOption(datasetSheet, 35)
+          )
+        },
+        analytics = getFormattedOption(datasetSheet, 36).map { url =>
+          DistributionMetadataUserInput(
+            accessURL = Some(url),
+            applicableLegislation = getFormattedOption(datasetSheet, 37),
+            title = getFormattedOption(datasetSheet, 38),
+            format = getFormattedOption(datasetSheet, 39)
+          )
+        },
         alternative = getFormattedOption(datasetSheet, 40).map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq),
         codeValues = Try(Seq(
           getCellStr(datasetSheet, 41).split(",", -1),
@@ -908,17 +922,17 @@ object MetadataUserInput {
           val v = getFormattedOption(distSheet, 7)
           if(alg.isDefined && v.isDefined) Some(Checksum(alg.get, v.get)) else None
         },
-        description = getFormattedOption(distSheet, 8),
-        format = getFormattedOption(distSheet, 9),
-        license = getFormattedOption(distSheet, 10),
-        mediaType = getFormattedOption(distSheet, 11),
-        packagingFormat = getFormattedOption(distSheet, 12),
-        releaseDate = getFormattedOption(distSheet, 13),
-        rights = getFormattedOption(distSheet, 14),
-        spatialResolution = Try(getCellStr(distSheet, 15).toDouble).toOption,
-        status = getFormattedOption(distSheet, 16),
-        temporalResolution = getFormattedOption(distSheet, 17),
-        accessService = getFormattedOption(distSheet, 18)
+        description = getFormattedOption(distSheet, 9),
+        format = getFormattedOption(distSheet, 12),
+        license = getFormattedOption(distSheet, 17),
+        mediaType = getFormattedOption(distSheet, 19),
+        packagingFormat = getFormattedOption(distSheet, 21),
+        releaseDate = getFormattedOption(distSheet, 22),
+        rights = getFormattedOption(distSheet, 23),
+        spatialResolution = Try(getCellStr(distSheet, 24).toDouble).toOption,
+        status = getFormattedOption(distSheet, 25),
+        temporalResolution = getFormattedOption(distSheet, 26),
+        accessService = getFormattedOption(distSheet, 27)
       ),
       dataDictionary = if (dataDictionarySheet != null && dataDictionarySheet.getLastRowNum >= 1)
         Some((1 to dataDictionarySheet.getLastRowNum).flatMap(row => {

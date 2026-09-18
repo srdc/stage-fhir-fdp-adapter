@@ -170,6 +170,14 @@ object MetadataWriter {
   }
 
   /**
+   * Nal Concepts re-added for R7
+   */
+  private def nalConcept(m: Model, value: String, scheme: String, rdfType: Resource): Resource =
+    safeRes(m, value)
+      .addProperty(RDF.`type`, rdfType)
+      .addProperty(SKOS.inScheme, m.createResource(scheme).addProperty(RDF.`type`, SKOS.ConceptScheme))
+
+  /**
    * Emits agents (publishers, creators, HDABs, attribution agents, rights holders) into a single model.
    *
    * Organisations resolve to a **named node** carrying a stable IRI, so every reference within the graph
@@ -185,17 +193,14 @@ object MetadataWriter {
     /**
      * @param agent          The agent to emit.
      * @param extraTypes     Additional rdf:type values (e.g. the HDAB class).
-     * @param requireContact Force a dcat:contactPoint even when no page/email is known - required by
-     *                       :PublisherShape and :HDABShape, which demand at least one.
+     * @param requireContact Force a cv:contactPoint even when no page/email is known
+     *                       Publisher, HDAB and Custodian all take it at cardinality 1 in R7.
      */
     def emit(agent: AgentDescription, extraTypes: Seq[Resource] = Seq.empty, requireContact: Boolean = false): Resource = {
       val key = agent.iri.map(_.trim).filter(_.nonEmpty).getOrElse("")
       val node = if (key.nonEmpty) cache.getOrElseUpdate(key, build(agent)) else build(agent)
 
       extraTypes.foreach(t => node.addProperty(RDF.`type`, t))
-      if (requireContact && !node.hasProperty(DCAT.contactPoint)) {
-        node.addProperty(DCAT.contactPoint, m.createResource().addProperty(RDF.`type`, VCARD4.Kind))
-      }
 
       if (requireContact && !node.hasProperty(CPOV.contactPoint)) {
         node.addProperty(CPOV.contactPoint, m.createResource().addProperty(RDF.`type`, CPOV.ContactPoint))
@@ -222,9 +227,12 @@ object MetadataWriter {
       val node = agent.iri.map(uri => safeRes(m, uri)).getOrElse(m.createResource())
       node.addProperty(RDF.`type`, FOAF.Agent)
       node.addProperty(FOAF.name, agent.name)
-      agent.`type`.foreach(t => node.addProperty(DCTerms.`type`, safeRes(m, t)))
+      // Type guard against nonsensical values
+      agent.`type`.map(_.trim).filter(_.nonEmpty).foreach { t =>
+        if (isAbsoluteIri(t)) node.addProperty(DCTerms.`type`, safeRes(m, t))
+        else logger.warn("Organization '{}' has dct:type '{}', which is not an absolute IRI; omitted.", agent.name, t)
+      }
       agent.note.foreach(n => node.addProperty(DCTerms.description, n))
-      agent.trusted.foreach(t => node.addLiteral(HealthDCATAP.trustedDataHolder, t))
       // Skipped when the homepage IS the agent's own IRI (a common case, since a homepage is a
       // reasonable canonical IRI). Emitting it would type the organisation as a foaf:Document and
       // leave a self-referential foaf:homepage.
@@ -243,16 +251,12 @@ object MetadataWriter {
         if (id.contains("://")) node.addProperty(m.createProperty(OWL_NS + "sameAs"), safeRes(m, id))
       }
 
+      // Agents carry a CPOV contact only. R7 asks for no vCard contact on any agent
       if (agent.contactPoint.page.isDefined || agent.contactPoint.email.isDefined) {
         val cpovContact = m.createResource().addProperty(RDF.`type`, CPOV.ContactPoint)
         agent.contactPoint.email.foreach(e => cpovContact.addProperty(CPOV.email, m.createLiteral(e)))
         agent.contactPoint.page.foreach(p => cpovContact.addProperty(CPOV.contactPage, safeRes(m, p)))
         node.addProperty(CPOV.contactPoint, cpovContact)
-
-        val contact = m.createResource().addProperty(RDF.`type`, VCARD4.Kind)
-        agent.contactPoint.email.foreach(e => contact.addProperty(VCARD4.hasEmail, safeRes(m, s"mailto:$e")))
-        agent.contactPoint.page.foreach(p => contact.addProperty(VCARD4.hasURL, safeRes(m, p)))
-        node.addProperty(DCAT.contactPoint, contact)
       }
       node
     }
@@ -316,7 +320,7 @@ object MetadataWriter {
 
       val csvwSubject = if (isFdpMode) "" else s"urn:uuid:${UUID.randomUUID()}"
       val dictionaryModel = if (isFhirConfigured) {
-        val model = createCsvwModel(jobStats, csvwSubject, datasetUri, vocabBase)
+        val model = createCsvwModel(jobStats, csvwSubject, datasetUri, vocabBase, meta.distribution.accessURL)
         if (jobStats.vocabularies.nonEmpty) model.add(createConceptSchemes(jobStats, vocabBase))
         model
       } else {
@@ -416,7 +420,7 @@ object MetadataWriter {
 
     // 4. CSVW
     val csvwModel = if (isFhirConfigured) {
-      val model = createCsvwModel(jobStats, initialCsvwUri, finalDatasetUri, vocabBase)
+      val model = createCsvwModel(jobStats, initialCsvwUri, finalDatasetUri, vocabBase, meta.distribution.accessURL)
       if (jobStats.vocabularies.nonEmpty) {
         model.add(createConceptSchemes(jobStats, vocabBase))
       }
@@ -690,7 +694,7 @@ object MetadataWriter {
     meta.dataset.accessRights.foreach(ar => dataset.addProperty(DCTerms.accessRights, safeRes(m, ar).addProperty(RDF.`type`, DCTerms.RightsStatement)))
     meta.dataset.frequency.foreach(f => dataset.addProperty(DCTerms.accrualPeriodicity, safeRes(m, f).addProperty(RDF.`type`, DCTerms.Frequency)))
 
-    meta.dataset.identifier.foreach(id => dataset.addProperty(DCTerms.identifier, m.createTypedLiteral(id.replaceAll("\\s+", ""), XSDDatatype.XSDanyURI)))
+    meta.dataset.identifier.foreach(id => dataset.addProperty(DCTerms.identifier, id.replaceAll("\\s+", "")))
 
     meta.dataset.keyword.foreach(_.foreach(kw => dataset.addProperty(DCAT.keyword, kw)))
     meta.dataset.spatial.foreach(_.foreach(sp => dataset.addProperty(DCTerms.spatial, safeRes(m, sp).addProperty(RDF.`type`, DCTerms.Location))))
@@ -765,11 +769,15 @@ object MetadataWriter {
 
     // --- OPTIONALS ---
     meta.dataset.conformsTo.map(_.trim).filter(_.nonEmpty).foreach { c =>
-      val value = HealthDataEuNal.standard(c).getOrElse {
-        logger.info("dct:conformsTo value '{}' has no HealthData@EU standard concept; emitted unchanged.", c)
-        c
+      HealthDataEuNal.standard(c) match {
+        case Some(value) =>
+          dataset.addProperty(DCTerms.conformsTo,
+            nalConcept(m, value, HealthDataEuNal.STANDARD_SCHEME, DCTerms.Standard))
+        case None =>
+          logger.warn("dct:conformsTo value '{}' has no HealthData@EU standard concept. It is emitted " +
+            "unchanged, and it will fail the R7 :ConformsToRestriction at sh:Violation severity.", c)
+          dataset.addProperty(DCTerms.conformsTo, safeRes(m, c).addProperty(RDF.`type`, DCTerms.Standard))
       }
-      dataset.addProperty(DCTerms.conformsTo, safeRes(m, value).addProperty(RDF.`type`, DCTerms.Standard))
     }
     meta.dataset.documentation.foreach(d => dataset.addProperty(FOAF.page, safeRes(m, d).addProperty(RDF.`type`, FOAF.Document)))
     meta.dataset.alternative.foreach(_.foreach(a => dataset.addProperty(DCTerms.alternative, a)))
@@ -787,10 +795,17 @@ object MetadataWriter {
     val (mappedCodingSystems, unmappedCodingSystems) =
       usableCodingSystems.map(cs => cs -> HealthDataEuNal.codingSystem(cs)).partition(_._2.isDefined)
     if (unmappedCodingSystems.nonEmpty) {
-      logger.info("{} coding system(s) have no HealthData@EU concept and are emitted unchanged: {}",
+      logger.warn("{} coding system(s) have no HealthData@EU concept. They are emitted unchanged, and " +
+        "each one will fail the R7 :HasCodingSystemRestriction at sh:Violation severity: {}",
         unmappedCodingSystems.size, unmappedCodingSystems.map(_._1).mkString(", "))
     }
-    (mappedCodingSystems.flatMap(_._2) ++ unmappedCodingSystems.map(_._1)).distinct.foreach(cs => dataset.addProperty(HealthDCATAP.hasCodingSystem, safeRes(m, cs).addProperty(RDF.`type`, DCTerms.Standard)))
+    val conformingCodingSystems = mappedCodingSystems.flatMap(_._2).distinct
+    conformingCodingSystems.foreach(cs => dataset.addProperty(HealthDCATAP.hasCodingSystem,
+      nalConcept(m, cs, HealthDataEuNal.CODING_SYSTEM_SCHEME, DCTerms.Standard)))
+    unmappedCodingSystems.map(_._1).distinct
+      .filterNot(conformingCodingSystems.contains)
+      .foreach(cs => dataset.addProperty(HealthDCATAP.hasCodingSystem,
+        safeRes(m, cs).addProperty(RDF.`type`, DCTerms.Standard)))
     meta.dataset.codeValues.foreach { codes =>
       codes.map(_.notation.trim).filter(_.nonEmpty).distinct.foreach { notation =>
         dataset.addProperty(HealthDCATAP.hasCodeValues, m.createLiteral(notation))
@@ -806,8 +821,13 @@ object MetadataWriter {
 
     // DPV-PD terms are referenced by IRI, so the shape's dpv:PersonalData class check only passes
     // if the graph says what they are.
-    meta.dataset.personalData.foreach(_.foreach(pd =>
-      dataset.addProperty(DPV.hasPersonalData, safeRes(m, pd).addProperty(RDF.`type`, DPV.PersonalData))))
+    meta.dataset.personalData.foreach(_.foreach { pd =>
+      val (value, replaced) = DPV.normalisePersonalData(pd)
+      replaced.foreach(alias => logger.warn(
+        "dpv:hasPersonalData value '{}' uses '{}', which is not the DPV Personal Data module. R6 makes " +
+          "{} a MUST for this property, so the value was rewritten to '{}'.", pd, alias, DPV.PD_NS, value))
+      dataset.addProperty(DPV.hasPersonalData, safeRes(m, value).addProperty(RDF.`type`, DPV.PersonalData))
+    })
     meta.dataset.landingPage.foreach(lp => dataset.addProperty(DCAT.landingPage, safeRes(m, lp).addProperty(RDF.`type`, FOAF.Document)))
     meta.dataset.language.foreach(l => dataset.addProperty(DCTerms.language, safeRes(m, l).addProperty(RDF.`type`, DCTerms.LinguisticSystem)))
     meta.dataset.modificationDate.filter(_.matches("\\d{4}-\\d{2}-\\d{2}")).foreach(md => dataset.addProperty(DCTerms.modified, m.createTypedLiteral(md, XSDDatatype.XSDdate)))
@@ -825,7 +845,11 @@ object MetadataWriter {
       // The attribution's name cell holds an Organization ID.
       attr.addProperty(PROV.agent, agents.emit(
         agents.resolve(Some(qa.name), "Dataset.qualifiedAttribution").get))
-      qa.role.foreach(r => attr.addProperty(DCAT.hadRole, safeRes(m, r)))
+      // dcat:hadRole takes an IRI from a controlled vocabulary. A word such as "sponsor" would be resolved to file:///.../sponsor.
+      qa.role.map(_.trim).filter(_.nonEmpty).foreach { r =>
+        if (isAbsoluteIri(r)) attr.addProperty(DCAT.hadRole, safeRes(m, r))
+        else logger.warn("Dataset.qualifiedAttribution role '{}' is not an absolute IRI; dcat:hadRole omitted.", r)
+      }
       dataset.addProperty(PROV.qualifiedAttribution, attr)
     })
 
@@ -878,7 +902,7 @@ object MetadataWriter {
    * @param vocabBase  Base URI for csvw:propertyUrl values.
    * @return A populated Jena Model representing the CSVW schema.
    */
-  private def createCsvwModel(stats: DatasetStats, subjectUri: String, parentUri: String, vocabBase: String): Model = {
+  private def createCsvwModel(stats: DatasetStats, subjectUri: String, parentUri: String, vocabBase: String, csvUrl: Option[String] = None): Model = {
     val m = createModel()
 
     val tableGroup = createSubject(m, subjectUri)
@@ -893,7 +917,10 @@ object MetadataWriter {
     val table = m.createResource("urn:uuid:" + UUID.randomUUID())
       .addProperty(RDF.`type`, CSVW.Table)
       .addProperty(DCTerms.title, m.createLiteral("Tabular Data", "en"))
-      .addProperty(m.createProperty(CSVW.NS + "url"), m.createResource("file:///dataset.csv"))
+
+    // csvw:url is 0..1. It points at the CSV the schema describes, so it takes the distribution's access URL. Omitted when none is configured, rather than emitting a placeholder.
+    csvUrl.map(_.trim).filter(u => u.nonEmpty && isAbsoluteIri(u))
+      .foreach(u => table.addProperty(m.createProperty(CSVW.NS + "url"), m.createResource(u)))
 
     tableGroup.addProperty(CSVW.table, table)
 
