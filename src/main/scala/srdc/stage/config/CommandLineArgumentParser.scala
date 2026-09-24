@@ -127,7 +127,13 @@ object CommandLineArgumentParser {
         opt[String]("vocab-base")
           .action((x, c) => c.copy(vocabBase = x.trim.replaceAll("/+$", "")))
           .text("Base URI for SKOS schemes and CSVW propertyUrl values. " +
-            "Default: http://stage-healthyageing.eu/fdp/vocab")
+            "Default: http://stage-healthyageing.eu/fdp/vocab"),
+
+        opt[Boolean]("exportFhirBundles")
+          .action((x, c) => c.copy(exportFhirBundles = x))
+          .text("Export a FHIR transaction bundle (Patient, Observation, QuestionnaireResponse, " +
+            "Questionnaire) from the source FHIR server. Independent of --job: it needs no 'bundle' job " +
+            "and no job-specific config. Requires a FHIR server. Default: false.")
       )
     }
 

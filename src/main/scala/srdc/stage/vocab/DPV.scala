@@ -14,5 +14,5 @@ object DPV {
   /**
    * The Data Privacy Vocabulary Personal Data module
    */
-  final val PD_NS = "https://w3id.org/dpv/dpv-pd#"
+  final val PD_NS = "https://w3id.org/dpv/pd#"
 }

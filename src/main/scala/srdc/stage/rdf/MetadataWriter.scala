@@ -109,6 +109,7 @@ object MetadataWriter {
   private val MEDIA_TYPE_EXTENT = "http://purl.org/dc/terms/MediaTypeOrExtent"
   private val MEDIA_TYPE = "http://purl.org/dc/terms/MediaType"
   private val LEGAL_RESOURCE = "http://data.europa.eu/eli/ontology#LegalResource"
+  private val ODRL_NS = "http://www.w3.org/ns/odrl/2/"
   private val DATASET_TYPE_STATISTICAL = "http://publications.europa.eu/resource/authority/dataset-type/STATISTICAL"
   private val DATA_THEME_HEALTH = "http://publications.europa.eu/resource/authority/data-theme/HEAL"
 
@@ -137,6 +138,7 @@ object MetadataWriter {
     m.setNsPrefix("oa", OA.NS)
     m.setNsPrefix("geodcatap", GEODCATAP.NS)
     m.setNsPrefix("cv", CPOV.NS)
+    m.setNsPrefix("odrl", ODRL_NS)
     m
   }
 
@@ -168,6 +170,17 @@ object MetadataWriter {
     }
     m.createResource(cleaned)
   }
+
+  /**
+   * A single applicableLegislation cell may carry more than one legal resource
+   */
+  private def legalResourceValues(raw: String): Seq[String] =
+    raw.split("[;\\n]").map(_.trim).filter(_.nonEmpty).toSeq
+
+  private def addLegalResources(m: Model, subject: Resource, raw: String): Unit =
+    legalResourceValues(raw).foreach(al =>
+      subject.addProperty(DCATAP.applicableLegislation,
+        safeRes(m, al).addProperty(RDF.`type`, m.createResource(LEGAL_RESOURCE))))
 
   /**
    * Nal Concepts re-added for R7
@@ -542,7 +555,7 @@ object MetadataWriter {
 
     meta.catalog.title.foreach(catalog.addProperty(DCTerms.title, _))
     meta.catalog.description.foreach(catalog.addProperty(DCTerms.description, _))
-    meta.catalog.applicableLegislation.foreach(al => catalog.addProperty(DCATAP.applicableLegislation, safeRes(m, al).addProperty(RDF.`type`, m.createResource(LEGAL_RESOURCE))))
+    meta.catalog.applicableLegislation.foreach(al => addLegalResources(m, catalog, al))
 
     val catStart = if (!isExcel && stats.startDate.isDefined) stats.startDate else meta.catalog.temporalCoverage.flatMap(_.start)
     val catEnd = if (!isExcel && stats.endDate.isDefined) stats.endDate else meta.catalog.temporalCoverage.flatMap(_.end)
@@ -611,7 +624,7 @@ object MetadataWriter {
    */
   private def populateDistribution(m: Model, dist: Resource, distMeta: DistributionMetadataUserInput): Unit = {
     distMeta.accessURL.foreach(url => dist.addProperty(DCAT.accessURL, safeRes(m, url)))
-    distMeta.applicableLegislation.foreach(al => dist.addProperty(DCATAP.applicableLegislation, safeRes(m, al).addProperty(RDF.`type`, m.createResource(LEGAL_RESOURCE))))
+    distMeta.applicableLegislation.foreach(al => addLegalResources(m, dist, al))
     distMeta.format.foreach(fmt => dist.addProperty(DCTerms.format, safeRes(m, fmt).addProperty(RDF.`type`, m.createResource(MEDIA_TYPE_EXTENT))))
 
     distMeta.title.foreach(dist.addProperty(DCTerms.title, _))
@@ -640,6 +653,22 @@ object MetadataWriter {
 
     distMeta.temporalResolution.filter(_.matches("^P.*")).foreach(tr => dist.addProperty(DCAT.temporalResolution, m.createTypedLiteral(tr, XSDDatatype.XSDduration)))
     distMeta.accessService.foreach(as => dist.addProperty(DCAT.accessService, safeRes(m, as)))
+    distMeta.language.foreach(l => dist.addProperty(DCTerms.language, safeRes(m, l).addProperty(RDF.`type`, DCTerms.LinguisticSystem)))
+    distMeta.documentation.foreach(d => dist.addProperty(FOAF.page, safeRes(m, d).addProperty(RDF.`type`, FOAF.Document)))
+    distMeta.compressionFormat.foreach(cf => dist.addProperty(m.createProperty(DCAT.NS + "compressFormat"), safeRes(m, cf).addProperty(RDF.`type`, m.createResource(MEDIA_TYPE))))
+    distMeta.downloadURL.foreach(url => dist.addProperty(m.createProperty(DCAT.NS + "downloadURL"), safeRes(m, url)))
+    distMeta.linkedSchemas.foreach(_.split("[;,\\n]").map(_.trim).filter(_.nonEmpty).foreach(ls =>
+      dist.addProperty(DCTerms.conformsTo, safeRes(m, ls).addProperty(RDF.`type`, DCTerms.Standard))))
+    distMeta.modificationDate.filter(_.matches("\\d{4}-\\d{2}-\\d{2}")).foreach(md => dist.addProperty(DCTerms.modified, m.createTypedLiteral(md, XSDDatatype.XSDdate)))
+    distMeta.obligation.map(_.trim).filter(_.nonEmpty).foreach { ob =>
+      val duty = m.createResource()
+        .addProperty(RDF.`type`, m.createResource(ODRL_NS + "Duty"))
+        .addProperty(RDFS.label, m.createLiteral(ob, "en"))
+      val policy = m.createResource()
+        .addProperty(RDF.`type`, m.createResource(ODRL_NS + "Policy"))
+        .addProperty(m.createProperty(ODRL_NS + "obligation"), duty)
+      dist.addProperty(m.createProperty(ODRL_NS + "hasPolicy"), policy)
+    }
   }
 
   /**
@@ -690,7 +719,7 @@ object MetadataWriter {
         .addProperty(RDFS.label, m.createLiteral(statement, "en")))
     }
     meta.dataset.version.foreach(dataset.addProperty(m.createProperty("http://www.w3.org/ns/dcat#version"), _))
-    meta.dataset.applicableLegislation.foreach(al => dataset.addProperty(DCATAP.applicableLegislation, safeRes(m, al).addProperty(RDF.`type`, m.createResource(LEGAL_RESOURCE))))
+    meta.dataset.applicableLegislation.foreach(al => addLegalResources(m, dataset, al))
     meta.dataset.accessRights.foreach(ar => dataset.addProperty(DCTerms.accessRights, safeRes(m, ar).addProperty(RDF.`type`, DCTerms.RightsStatement)))
     meta.dataset.frequency.foreach(f => dataset.addProperty(DCTerms.accrualPeriodicity, safeRes(m, f).addProperty(RDF.`type`, DCTerms.Frequency)))
 
@@ -864,7 +893,8 @@ object MetadataWriter {
       val node = m.createResource()
         .addProperty(RDF.`type`, DPV.LegalBasis)
         .addProperty(DCTerms.description, m.createLiteral(lb, "en"))
-      meta.dataset.applicableLegislation.map(_.trim).filter(_.nonEmpty)
+      meta.dataset.applicableLegislation.toSeq
+        .flatMap(legalResourceValues)
         .foreach(al => node.addProperty(DCTerms.source, safeRes(m, al)))
       dataset.addProperty(DPV.hasLegalBasis, node)
     }

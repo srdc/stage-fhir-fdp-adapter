@@ -38,19 +38,20 @@ object DataExtractionCLI {
    * @param config The fully populated application configuration object.
    */
   private def runJob(config: AppConfig): Unit = {
-    val jobs = config.jobType.split(",").map(_.trim.toLowerCase)
+    val jobs = config.jobType.split(",").map(_.trim.toLowerCase).filter(_.nonEmpty)
     logger.info(s"Initiating extraction pipelines for ${jobs.length} module(s): ${jobs.mkString(", ").toUpperCase}")
 
     val (bundleJobs, sparkJobs) = jobs.partition(_ == "bundle")
-    if (bundleJobs.nonEmpty) {
+
+    val exportBundle = bundleJobs.nonEmpty || config.exportFhirBundles
+    if (exportBundle) {
       if (config.fhirServer == null || config.fhirServer.trim.isEmpty) {
-        logger.error("The 'bundle' job requires a FHIR server. Set --server or fhirServer in application.conf.")
+        logger.error("FHIR bundle export requires a FHIR server. Set --server or fhirServer in application.conf " +
+          "(triggered by the 'bundle' job or exportFhirBundles).")
         System.exit(1)
       }
-      bundleJobs.foreach { _ =>
-        val path = BundleExtraction.run(config)
-        logger.info(s"--- Bundle extraction complete: $path ---")
-      }
+      val path = BundleExtraction.run(config)
+      logger.info(s"--- Bundle extraction complete: $path ---")
       if (sparkJobs.isEmpty) System.exit(0)
     }
 
@@ -60,7 +61,7 @@ object DataExtractionCLI {
       System.exit(0)
     }
 
-    if (sparkJobs.forall(_.trim.isEmpty)) {
+    if (sparkJobs.isEmpty) {
       logger.error("A FHIR server is configured but no job type was given. " +
         "Pass --job (or set jobType in application.conf) with one or more of: survey, observation, full, bundle.")
       System.exit(1)

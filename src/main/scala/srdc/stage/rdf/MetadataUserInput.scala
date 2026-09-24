@@ -61,7 +61,14 @@ case class DistributionMetadataUserInput(
                                           spatialResolution: Option[Double] = None,
                                           status: Option[String] = None,
                                           temporalResolution: Option[String] = None,
-                                          accessService: Option[String] = None
+                                          accessService: Option[String] = None,
+                                          language: Option[String] = None,
+                                          documentation: Option[String] = None,
+                                          compressionFormat: Option[String] = None,
+                                          downloadURL: Option[String] = None,
+                                          linkedSchemas: Option[String] = None,
+                                          modificationDate: Option[String] = None,
+                                          obligation: Option[String] = None
                                         )
 
 case class DatasetMetadataUserInput(
@@ -862,13 +869,10 @@ object MetadataUserInput {
           )
         },
         alternative = getFormattedOption(datasetSheet, 40).map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq),
-        codeValues = Try(Seq(
-          getCellStr(datasetSheet, 41).split(",", -1),
-          getCellStr(datasetSheet, 42).split(",", -1),
-          getCellStr(datasetSheet, 43).split(",", -1)
-        ).transpose.filter(value => value.size >= 3 && value(1).nonEmpty && value(2).nonEmpty).map {
-          case Seq(scheme, notation, label) => CodeValue(toStringOption(scheme), notation, label)
-        }).toOption,
+        codeValues = {
+          val notations = getCellStr(datasetSheet, 42).split(",").map(_.trim).filter(_.nonEmpty).toSeq
+          if (notations.nonEmpty) Some(notations.map(n => CodeValue(None, n, ""))) else None
+        },
         codingSystems = getFormattedOption(datasetSheet, 44).map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq),
         numRecords = Try(getCellStr(datasetSheet, 45).toDouble.toInt).toOption,
         retentionPeriod = (
@@ -882,7 +886,7 @@ object MetadataUserInput {
         minAge = Try(getCellStr(datasetSheet, 49).toDouble.toInt).toOption,
         numUniqueIndividual = Try(getCellStr(datasetSheet, 50).toDouble.toInt).toOption,
         personalData = getFormattedOption(datasetSheet, 51).map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq
-          .map(pd => s"https://w3c.github.io/dpv/2.0/pd#$pd")),
+          .map(pd => s"https://w3id.org/dpv/pd#$pd")),
         landingPage = getFormattedOption(datasetSheet, 52),
         language = getFormattedOption(datasetSheet, 53),
         modificationDate = getFormattedOption(datasetSheet, 54),
@@ -906,7 +910,7 @@ object MetadataUserInput {
         versionNotes = getFormattedOption(datasetSheet, 63),
         wasGeneratedBy = getFormattedOption(datasetSheet, 64).map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq),
         purpose = getFormattedOption(datasetSheet, 65),
-        legalBasis = getFormattedOption(datasetSheet, 78),
+        legalBasis = getFormattedOption(datasetSheet, 66),
         structuredData = toBooleanOption(getCellStr(datasetSheet, 75), "Dataset.structuredData"),
         existing = toBooleanOption(getCellStr(datasetSheet, 76), "Dataset.existing"),
         uri = getFormattedOption(datasetSheet, 77)
@@ -932,7 +936,14 @@ object MetadataUserInput {
         spatialResolution = Try(getCellStr(distSheet, 24).toDouble).toOption,
         status = getFormattedOption(distSheet, 25),
         temporalResolution = getFormattedOption(distSheet, 26),
-        accessService = getFormattedOption(distSheet, 27)
+        accessService = getFormattedOption(distSheet, 27),
+        language = getFormattedOption(distSheet, 16),
+        documentation = getFormattedOption(distSheet, 10),
+        compressionFormat = getFormattedOption(distSheet, 8),
+        downloadURL = getFormattedOption(distSheet, 11),
+        linkedSchemas = getFormattedOption(distSheet, 18),
+        modificationDate = getFormattedOption(distSheet, 20),
+        obligation = getFormattedOption(distSheet, 15)
       ),
       dataDictionary = if (dataDictionarySheet != null && dataDictionarySheet.getLastRowNum >= 1)
         Some((1 to dataDictionarySheet.getLastRowNum).flatMap(row => {

@@ -25,7 +25,8 @@ case class AppConfig(
                       dateTo: Option[String] = None,
                       vocabBase: String = "http://stage-healthyageing.eu/fdp/vocab",
                       keepDrafts: Boolean = false,
-                      datasetUri: Option[String] = None
+                      datasetUri: Option[String] = None,
+                      exportFhirBundles: Boolean = false
                     )
 
 object AppConfig {
@@ -53,7 +54,8 @@ object AppConfig {
       clientId = if (authEnabled && conf.hasPath("auth.clientId")) Some(conf.getString("auth.clientId")) else None,
       clientSecret = if (authEnabled && conf.hasPath("auth.clientSecret")) Some(conf.getString("auth.clientSecret")) else None,
       scope = if (authEnabled && conf.hasPath("auth.scope")) Some(conf.getString("auth.scope").split(" ").toList) else None,
-      token = if (authEnabled && conf.hasPath("auth.token")) Some(conf.getString("auth.token")) else None
+      token = if (authEnabled && conf.hasPath("auth.token")) Some(conf.getString("auth.token")) else None,
+      exportFhirBundles = conf.hasPath("exportFhirBundles") && conf.getBoolean("exportFhirBundles")
     )
   }
 }
