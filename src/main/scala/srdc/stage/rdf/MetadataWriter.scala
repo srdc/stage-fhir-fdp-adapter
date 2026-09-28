@@ -106,6 +106,19 @@ object MetadataWriter {
   private val ADMS_LICENCE_TYPE_SCHEME = "http://purl.org/adms/licencetype/1.0"
   private val OWL_NS = "http://www.w3.org/2002/07/owl#"
 
+  private val IANA_MEDIA_TYPES_BASE = "https://www.iana.org/assignments/media-types/"
+  private val IanaMediaTypeIri = "^http.*://www\\.iana\\.org/assignments/media-types/.+".r
+  private val BareMediaType = "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$".r
+
+  private def ianaMediaType(value: String, field: String): String = {
+    val given = value.trim
+    val iri = if (BareMediaType.pattern.matcher(given).matches()) IANA_MEDIA_TYPES_BASE + given else given
+    if (IanaMediaTypeIri.findFirstIn(iri).isEmpty)
+      logger.warn("{}: '{}' is not an IANA media type (https://www.iana.org/assignments/media-types/...); " +
+        "HealthDCAT-AP R7 reports this as a warning. Correct the value in the input.", field, value)
+    iri
+  }
+
   private val MEDIA_TYPE_EXTENT = "http://purl.org/dc/terms/MediaTypeOrExtent"
   private val MEDIA_TYPE = "http://purl.org/dc/terms/MediaType"
   private val LEGAL_RESOURCE = "http://data.europa.eu/eli/ontology#LegalResource"
@@ -387,7 +400,7 @@ object MetadataWriter {
         uri
       }
     }
-    saveLocalFile(outputDir, "Catalog", createCatalogModel(meta, globalStats, finalCatalogUri, isFdpMode, fdpUrl, runMode, registry))
+    saveLocalFile(outputDir, "Catalog", createCatalogModel(meta, globalStats, finalCatalogUri, isFdpMode, fdpUrl, runMode, registry, linkToFdpRoot = false))
 
     val hasVariableDescription =
       if (isFhirConfigured) jobStats.columns.nonEmpty
@@ -543,9 +556,10 @@ object MetadataWriter {
    * @param isFdpMode  Boolean indicating if FDP mode is active to add isPartOf links.
    * @param fdpUrl     The FDP server base URL.
    * @param runMode    The current application run mode.
+   * @param linkToFdpRoot Add `dct:isPartOf <fdpUrl>` (FDP mode only).
    * @return A populated Jena Model.
    */
-  private def createCatalogModel(meta: MetadataUserInput, stats: DatasetStats, subjectUri: String, isFdpMode: Boolean, fdpUrl: String, runMode: String, registry: OrganizationRegistry): Model = {
+  private def createCatalogModel(meta: MetadataUserInput, stats: DatasetStats, subjectUri: String, isFdpMode: Boolean, fdpUrl: String, runMode: String, registry: OrganizationRegistry, linkToFdpRoot: Boolean = true): Model = {
     val m = createModel()
     val catalog = createSubject(m, subjectUri).addProperty(RDF.`type`, DCAT.Catalog)
 
@@ -586,7 +600,7 @@ object MetadataWriter {
     agents.resolve(meta.catalog.publisherRef, "Catalog.publisher")
       .foreach(publisher => catalog.addProperty(DCTerms.publisher, agents.emit(publisher, requireContact = true)))
 
-    if (isFdpMode && fdpUrl.nonEmpty) catalog.addProperty(DCTerms.isPartOf, safeRes(m, fdpUrl))
+    if (linkToFdpRoot && isFdpMode && fdpUrl.nonEmpty) catalog.addProperty(DCTerms.isPartOf, safeRes(m, fdpUrl))
     m
   }
 
@@ -644,8 +658,10 @@ object MetadataWriter {
       dist.addProperty(m.createProperty("http://spdx.org/rdf/terms#checksum"), checksumRes)
     }
 
-    distMeta.mediaType.foreach(mt => dist.addProperty(DCAT.mediaType, safeRes(m, mt).addProperty(RDF.`type`, m.createResource(MEDIA_TYPE))))
-    distMeta.packagingFormat.foreach(pf => dist.addProperty(DCAT.packageFormat, safeRes(m, pf).addProperty(RDF.`type`, m.createResource(MEDIA_TYPE))))
+    distMeta.mediaType.foreach(mt => dist.addProperty(DCAT.mediaType,
+      safeRes(m, ianaMediaType(mt, "Distribution.mediaType")).addProperty(RDF.`type`, m.createResource(MEDIA_TYPE))))
+    distMeta.packagingFormat.foreach(pf => dist.addProperty(DCAT.packageFormat,
+      safeRes(m, ianaMediaType(pf, "Distribution.packageFormat")).addProperty(RDF.`type`, m.createResource(MEDIA_TYPE))))
     distMeta.releaseDate.filter(_.matches("\\d{4}-\\d{2}-\\d{2}")).foreach(rd => dist.addProperty(DCTerms.issued, m.createTypedLiteral(rd, XSDDatatype.XSDdate)))
     distMeta.rights.foreach(r => dist.addProperty(DCTerms.rights, m.createResource().addProperty(RDF.`type`, DCTerms.RightsStatement).addProperty(DCTerms.description, r)))
     distMeta.spatialResolution.foreach(sr => dist.addProperty(DCAT.spatialResolutionInMeters, m.createTypedLiteral(sr, XSDDatatype.XSDdecimal)))
@@ -655,7 +671,8 @@ object MetadataWriter {
     distMeta.accessService.foreach(as => dist.addProperty(DCAT.accessService, safeRes(m, as)))
     distMeta.language.foreach(l => dist.addProperty(DCTerms.language, safeRes(m, l).addProperty(RDF.`type`, DCTerms.LinguisticSystem)))
     distMeta.documentation.foreach(d => dist.addProperty(FOAF.page, safeRes(m, d).addProperty(RDF.`type`, FOAF.Document)))
-    distMeta.compressionFormat.foreach(cf => dist.addProperty(m.createProperty(DCAT.NS + "compressFormat"), safeRes(m, cf).addProperty(RDF.`type`, m.createResource(MEDIA_TYPE))))
+    distMeta.compressionFormat.foreach(cf => dist.addProperty(m.createProperty(DCAT.NS + "compressFormat"),
+      safeRes(m, ianaMediaType(cf, "Distribution.compressFormat")).addProperty(RDF.`type`, m.createResource(MEDIA_TYPE))))
     distMeta.downloadURL.foreach(url => dist.addProperty(m.createProperty(DCAT.NS + "downloadURL"), safeRes(m, url)))
     distMeta.linkedSchemas.foreach(_.split("[;,\\n]").map(_.trim).filter(_.nonEmpty).foreach(ls =>
       dist.addProperty(DCTerms.conformsTo, safeRes(m, ls).addProperty(RDF.`type`, DCTerms.Standard))))

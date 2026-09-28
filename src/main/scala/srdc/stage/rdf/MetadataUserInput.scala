@@ -886,7 +886,7 @@ object MetadataUserInput {
         minAge = Try(getCellStr(datasetSheet, 49).toDouble.toInt).toOption,
         numUniqueIndividual = Try(getCellStr(datasetSheet, 50).toDouble.toInt).toOption,
         personalData = getFormattedOption(datasetSheet, 51).map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq
-          .map(pd => s"https://w3id.org/dpv/pd#$pd")),
+          .map(pd => s"https://w3id.org/dpv/dpv-pd#$pd")),
         landingPage = getFormattedOption(datasetSheet, 52),
         language = getFormattedOption(datasetSheet, 53),
         modificationDate = getFormattedOption(datasetSheet, 54),
