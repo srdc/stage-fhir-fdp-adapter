@@ -2,12 +2,12 @@ package srdc.stage.rdf
 
 import srdc.stage.client.FdpClient
 import org.apache.jena.rdf.model.{Model, ModelFactory, Resource}
-import org.apache.jena.vocabulary.{DCAT, DCTerms, RDF, SKOS, VCARD4, XSD}
+import org.apache.jena.vocabulary.{DCAT, DCTerms, RDF, RDFS, SKOS, VCARD4, XSD}
 import org.apache.jena.datatypes.xsd.XSDDatatype
 import org.apache.jena.sparql.vocabulary.FOAF
 import org.slf4j.LoggerFactory
 import srdc.stage.util.RdfUtils
-import srdc.stage.vocab.{ADMS, CSVW, DCATAP, DPV, HealthDCATAP, PROV}
+import srdc.stage.vocab.{ADMS, CPOV, CSVW, DCATAP, DPV, DQV, GEODCATAP, HealthDCATAP, HealthDataEuNal, OA, PROV}
 
 import java.nio.file.{Files, Paths}
 import java.util.UUID
@@ -102,11 +102,27 @@ object MetadataWriter {
   )
   private val ELI_NS = "http://data.europa.eu/eli/ontology#"
   private val DQV_NS = "http://www.w3.org/ns/dqv#"
+  private val ADMS_LICENCE_TYPE_NS = "http://purl.org/adms/licencetype/"
+  private val ADMS_LICENCE_TYPE_SCHEME = "http://purl.org/adms/licencetype/1.0"
   private val OWL_NS = "http://www.w3.org/2002/07/owl#"
+
+  private val IANA_MEDIA_TYPES_BASE = "https://www.iana.org/assignments/media-types/"
+  private val IanaMediaTypeIri = "^http.*://www\\.iana\\.org/assignments/media-types/.+".r
+  private val BareMediaType = "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$".r
+
+  private def ianaMediaType(value: String, field: String): String = {
+    val given = value.trim
+    val iri = if (BareMediaType.pattern.matcher(given).matches()) IANA_MEDIA_TYPES_BASE + given else given
+    if (IanaMediaTypeIri.findFirstIn(iri).isEmpty)
+      logger.warn("{}: '{}' is not an IANA media type (https://www.iana.org/assignments/media-types/...); " +
+        "HealthDCAT-AP R7 reports this as a warning. Correct the value in the input.", field, value)
+    iri
+  }
 
   private val MEDIA_TYPE_EXTENT = "http://purl.org/dc/terms/MediaTypeOrExtent"
   private val MEDIA_TYPE = "http://purl.org/dc/terms/MediaType"
   private val LEGAL_RESOURCE = "http://data.europa.eu/eli/ontology#LegalResource"
+  private val ODRL_NS = "http://www.w3.org/ns/odrl/2/"
   private val DATASET_TYPE_STATISTICAL = "http://publications.europa.eu/resource/authority/dataset-type/STATISTICAL"
   private val DATA_THEME_HEALTH = "http://publications.europa.eu/resource/authority/data-theme/HEAL"
 
@@ -132,6 +148,10 @@ object MetadataWriter {
     m.setNsPrefix("eli", ELI_NS)
     m.setNsPrefix("dqv", DQV_NS)
     m.setNsPrefix("owl", OWL_NS)
+    m.setNsPrefix("oa", OA.NS)
+    m.setNsPrefix("geodcatap", GEODCATAP.NS)
+    m.setNsPrefix("cv", CPOV.NS)
+    m.setNsPrefix("odrl", ODRL_NS)
     m
   }
 
@@ -147,6 +167,9 @@ object MetadataWriter {
     if (uri == null || uri.trim.isEmpty) m.createResource("") else m.createResource(uri)
   }
 
+  private def isAbsoluteIri(value: String): Boolean =
+    value.trim.matches("^[A-Za-z][A-Za-z0-9+.\\-]*:.*")
+
   /**
    * Prevents invalid URI characters (like spaces) from breaking the Turtle Parser.
    * @param m      The Jena Model.
@@ -155,8 +178,30 @@ object MetadataWriter {
    */
   private def safeRes(m: Model, uriStr: String): Resource = {
     val cleaned = uriStr.trim.replaceAll("\\s+", "%20").replaceAll("[<>\"{}|\\\\^`]", "")
+    if (!isAbsoluteIri(cleaned)) {
+      logger.warn("'{}' is not an absolute IRI and will be resolved relative to the output file.", uriStr)
+    }
     m.createResource(cleaned)
   }
+
+  /**
+   * A single applicableLegislation cell may carry more than one legal resource
+   */
+  private def legalResourceValues(raw: String): Seq[String] =
+    raw.split("[;\\n]").map(_.trim).filter(_.nonEmpty).toSeq
+
+  private def addLegalResources(m: Model, subject: Resource, raw: String): Unit =
+    legalResourceValues(raw).foreach(al =>
+      subject.addProperty(DCATAP.applicableLegislation,
+        safeRes(m, al).addProperty(RDF.`type`, m.createResource(LEGAL_RESOURCE))))
+
+  /**
+   * Nal Concepts re-added for R7
+   */
+  private def nalConcept(m: Model, value: String, scheme: String, rdfType: Resource): Resource =
+    safeRes(m, value)
+      .addProperty(RDF.`type`, rdfType)
+      .addProperty(SKOS.inScheme, m.createResource(scheme).addProperty(RDF.`type`, SKOS.ConceptScheme))
 
   /**
    * Emits agents (publishers, creators, HDABs, attribution agents, rights holders) into a single model.
@@ -174,16 +219,17 @@ object MetadataWriter {
     /**
      * @param agent          The agent to emit.
      * @param extraTypes     Additional rdf:type values (e.g. the HDAB class).
-     * @param requireContact Force a dcat:contactPoint even when no page/email is known - required by
-     *                       :PublisherShape and :HDABShape, which demand at least one.
+     * @param requireContact Force a cv:contactPoint even when no page/email is known
+     *                       Publisher, HDAB and Custodian all take it at cardinality 1 in R7.
      */
     def emit(agent: AgentDescription, extraTypes: Seq[Resource] = Seq.empty, requireContact: Boolean = false): Resource = {
       val key = agent.iri.map(_.trim).filter(_.nonEmpty).getOrElse("")
       val node = if (key.nonEmpty) cache.getOrElseUpdate(key, build(agent)) else build(agent)
 
       extraTypes.foreach(t => node.addProperty(RDF.`type`, t))
-      if (requireContact && !node.hasProperty(DCAT.contactPoint)) {
-        node.addProperty(DCAT.contactPoint, m.createResource().addProperty(RDF.`type`, VCARD4.Kind))
+
+      if (requireContact && !node.hasProperty(CPOV.contactPoint)) {
+        node.addProperty(CPOV.contactPoint, m.createResource().addProperty(RDF.`type`, CPOV.ContactPoint))
       }
       node
     }
@@ -207,9 +253,12 @@ object MetadataWriter {
       val node = agent.iri.map(uri => safeRes(m, uri)).getOrElse(m.createResource())
       node.addProperty(RDF.`type`, FOAF.Agent)
       node.addProperty(FOAF.name, agent.name)
-      agent.`type`.foreach(t => node.addProperty(DCTerms.`type`, safeRes(m, t)))
+      // Type guard against nonsensical values
+      agent.`type`.map(_.trim).filter(_.nonEmpty).foreach { t =>
+        if (isAbsoluteIri(t)) node.addProperty(DCTerms.`type`, safeRes(m, t))
+        else logger.warn("Organization '{}' has dct:type '{}', which is not an absolute IRI; omitted.", agent.name, t)
+      }
       agent.note.foreach(n => node.addProperty(DCTerms.description, n))
-      agent.trusted.foreach(t => node.addLiteral(HealthDCATAP.trustedDataHolder, t))
       // Skipped when the homepage IS the agent's own IRI (a common case, since a homepage is a
       // reasonable canonical IRI). Emitting it would type the organisation as a foaf:Document and
       // leave a self-referential foaf:homepage.
@@ -228,11 +277,12 @@ object MetadataWriter {
         if (id.contains("://")) node.addProperty(m.createProperty(OWL_NS + "sameAs"), safeRes(m, id))
       }
 
+      // Agents carry a CPOV contact only. R7 asks for no vCard contact on any agent
       if (agent.contactPoint.page.isDefined || agent.contactPoint.email.isDefined) {
-        val contact = m.createResource().addProperty(RDF.`type`, VCARD4.Kind)
-        agent.contactPoint.email.foreach(e => contact.addProperty(VCARD4.hasEmail, safeRes(m, s"mailto:$e")))
-        agent.contactPoint.page.foreach(p => contact.addProperty(VCARD4.hasURL, safeRes(m, p)))
-        node.addProperty(DCAT.contactPoint, contact)
+        val cpovContact = m.createResource().addProperty(RDF.`type`, CPOV.ContactPoint)
+        agent.contactPoint.email.foreach(e => cpovContact.addProperty(CPOV.email, m.createLiteral(e)))
+        agent.contactPoint.page.foreach(p => cpovContact.addProperty(CPOV.contactPage, safeRes(m, p)))
+        node.addProperty(CPOV.contactPoint, cpovContact)
       }
       node
     }
@@ -260,7 +310,7 @@ object MetadataWriter {
    * @param sharedCatalogUri An optional URI to reuse an existing Catalog across multiple jobs.
    * @return The URI of the Catalog used or created.
    */
-  def exportResults(outputDir: String, fdpUrl: String, fdpEmail: String, fdpPassword: String, meta: MetadataUserInput, jobStats: DatasetStats, globalStats: DatasetStats, runMode: String, sharedCatalogUri: Option[String] = None, isFhirConfigured: Boolean = true, vocabBase: String = DEFAULT_VOCAB_BASE): String = {
+  def exportResults(outputDir: String, fdpUrl: String, fdpEmail: String, fdpPassword: String, meta: MetadataUserInput, jobStats: DatasetStats, globalStats: DatasetStats, runMode: String, sharedCatalogUri: Option[String] = None, isFhirConfigured: Boolean = true, vocabBase: String = DEFAULT_VOCAB_BASE, keepDrafts: Boolean = false): String = {
     logger.info("Starting Metadata Export...")
 
     val isFdpMode = fdpUrl.trim.nonEmpty && fdpEmail.trim.nonEmpty
@@ -282,6 +332,55 @@ object MetadataWriter {
       Files.createDirectories(outDir)
     }
 
+    // Existing dataset branch
+    if (meta.dataset.existing.contains(true)) {
+      val datasetUri = meta.dataset.uri.map(_.trim).filter(_.nonEmpty).getOrElse(
+        throw new IllegalArgumentException("Dataset.uri is REQUIRED when Dataset.existing is true.")
+      )
+      if (isFdpMode && !datasetUri.startsWith(fdpUrl)) {
+        throw new IllegalArgumentException(
+          s"Dataset.uri '$datasetUri' does not belong to the target FDP '$fdpUrl'."
+        )
+      }
+      logger.info("Existing Dataset mode: attaching a Data Dictionary to {}", datasetUri)
+
+      val csvwSubject = if (isFdpMode) "" else s"urn:uuid:${UUID.randomUUID()}"
+      val dictionaryModel = if (isFhirConfigured) {
+        val model = createCsvwModel(jobStats, csvwSubject, datasetUri, vocabBase, meta.distribution.accessURL)
+        if (jobStats.vocabularies.nonEmpty) model.add(createConceptSchemes(jobStats, vocabBase))
+        model
+      } else {
+        val fields = meta.dataDictionary.getOrElse(List.empty)
+        if (fields.isEmpty) {
+          throw new IllegalArgumentException(
+            "Existing Dataset mode needs variables: configure a FHIR server or fill the " +
+              "'Data Dictionary' sheet. An empty CSVW is rejected by the FDP."
+          )
+        }
+        createDictionaryModel(
+          fields = fields,
+          vocabularies = meta.dataDictionaryValueSets,
+          subjectUri = csvwSubject,
+          parentDatasetUri = datasetUri,
+          vocabBase = vocabBase,
+          registry = registry
+        )
+      }
+
+      saveLocalFile(outputDir, "CSVW", dictionaryModel)
+
+      if (isFdpMode) {
+        val csvwUri = postToFdp(fdpUrl, fdpEmail, fdpPassword, "csvw", dictionaryModel)
+        logger.info("CSVW created at: {}", csvwUri)
+        publish(csvwUri, fdpEmail, fdpPassword, fdpUrl, keepDrafts)
+        logger.info("Data Dictionary attached to existing Dataset {}", datasetUri)
+      } else {
+        logger.info("Data Dictionary written locally against Dataset {}", datasetUri)
+      }
+
+      return sharedCatalogUri.getOrElse("")
+    }
+
     // 1. Catalog
     val finalCatalogUri: String = sharedCatalogUri.getOrElse {
       val configuredCatalogUri = meta.catalog.uri.getOrElse("")
@@ -293,6 +392,7 @@ object MetadataWriter {
         val model = createCatalogModel(meta, globalStats, "", isFdpMode, fdpUrl, runMode, registry)
         val loc = postToFdp(fdpUrl, fdpEmail, fdpPassword, "catalog", model)
         logger.info("Catalog confirmed at: {}", loc)
+        publish(loc, fdpEmail, fdpPassword, fdpUrl, keepDrafts)
         loc
       } else {
         val uri = if (meta.catalog.existing.contains(true) && configuredCatalogUri.trim.nonEmpty) configuredCatalogUri.trim else s"urn:uuid:${UUID.randomUUID()}"
@@ -300,38 +400,53 @@ object MetadataWriter {
         uri
       }
     }
-    saveLocalFile(outputDir, "Catalog", createCatalogModel(meta, globalStats, finalCatalogUri, isFdpMode, fdpUrl, runMode, registry))
+    saveLocalFile(outputDir, "Catalog", createCatalogModel(meta, globalStats, finalCatalogUri, isFdpMode, fdpUrl, runMode, registry, linkToFdpRoot = false))
+
+    val hasVariableDescription =
+      if (isFhirConfigured) jobStats.columns.nonEmpty
+      else meta.dataDictionary.exists(_.nonEmpty)
+    val structuredData = meta.dataset.structuredData.getOrElse(hasVariableDescription)
+
+    val initialCsvwUri = if (isFdpMode) "" else s"urn:uuid:${UUID.randomUUID()}"
+    val localVariablesUri = if (isFdpMode) None else Some(initialCsvwUri).filter(_ => hasVariableDescription)
+
+    val initialDistUri = if (isFdpMode) "" else s"urn:uuid:${UUID.randomUUID()}"
+    val localDistributionUri = if (isFdpMode) None else Some(initialDistUri)
 
     // 2. Dataset (Uses Job-Specific Stats)
+    var datasetPublished = false
     val finalDatasetUri = if (isFdpMode) {
       logger.info("Creating NEW Dataset on FDP...")
-      val datasetModel = createDatasetModel(meta, jobStats, finalCatalogUri, "", runMode, registry)
+      val datasetModel = createDatasetModel(meta, jobStats, finalCatalogUri, "", runMode, registry,
+        variablesUri = None, structuredData = structuredData)
       val loc = postToFdp(fdpUrl, fdpEmail, fdpPassword, "dataset", datasetModel)
       logger.info("Dataset created at: {}", loc)
+      datasetPublished = publish(loc, fdpEmail, fdpPassword, fdpUrl, keepDrafts)
       loc
     } else {
       s"urn:uuid:${UUID.randomUUID()}"
     }
-    saveLocalFile(outputDir, "Dataset", createDatasetModel(meta, jobStats, finalCatalogUri, finalDatasetUri, runMode, registry))
+    saveLocalFile(outputDir, "Dataset", createDatasetModel(meta, jobStats, finalCatalogUri, finalDatasetUri,
+      runMode, registry, variablesUri = localVariablesUri, structuredData = structuredData,
+      distributionUri = localDistributionUri))
 
     // 3. Main Distribution
     logger.info("Preparing Distribution (Linking to Parent Dataset: {})...", finalDatasetUri)
-    val initialDistUri = if (isFdpMode) "" else s"urn:uuid:${UUID.randomUUID()}"
     val distModel = createDistributionModel(meta.distribution, finalDatasetUri, initialDistUri)
     saveLocalFile(outputDir, "Distribution", distModel)
 
     val finalDistUri = if (isFdpMode) {
       val loc = postToFdp(fdpUrl, fdpEmail, fdpPassword, "distribution", distModel)
       logger.info("Distribution created at: {}", loc)
+      publish(loc, fdpEmail, fdpPassword, fdpUrl, keepDrafts)
       loc
     } else {
       initialDistUri
     }
 
     // 4. CSVW
-    val initialCsvwUri = if (isFdpMode) "" else s"urn:uuid:${UUID.randomUUID()}"
     val csvwModel = if (isFhirConfigured) {
-      val model = createCsvwModel(jobStats, initialCsvwUri, finalDistUri, vocabBase)
+      val model = createCsvwModel(jobStats, initialCsvwUri, finalDatasetUri, vocabBase, meta.distribution.accessURL)
       if (jobStats.vocabularies.nonEmpty) {
         model.add(createConceptSchemes(jobStats, vocabBase))
       }
@@ -345,7 +460,7 @@ object MetadataWriter {
         fields = fields,
         vocabularies = meta.dataDictionaryValueSets,
         subjectUri = initialCsvwUri,
-        parentDistributionUri = finalDistUri,
+        parentDatasetUri = finalDatasetUri,
         vocabBase = vocabBase,
         registry = registry
       )
@@ -354,14 +469,51 @@ object MetadataWriter {
     saveLocalFile(outputDir, "CSVW", csvwModel)
 
     if (isFdpMode) {
-      val loc = postToFdp(fdpUrl, fdpEmail, fdpPassword, "csvw", csvwModel)
-      logger.info("CSVW created at: {}", loc)
+      val csvwUri = postToFdp(fdpUrl, fdpEmail, fdpPassword, "csvw", csvwModel)
+      logger.info("CSVW created at: {}", csvwUri)
+      publish(csvwUri, fdpEmail, fdpPassword, fdpUrl, keepDrafts)
+
+      // 5. Link the variables back to the Dataset
+      if (hasVariableDescription && !datasetPublished) {
+        logger.warn("Dataset {} is still in DRAFT, so healthdcatap:hasVariables cannot be attached " +
+          "(the FDP refuses updates on drafts). Publish it and re-run, or drop --keep-drafts.", finalDatasetUri)
+      }
+      if (hasVariableDescription && datasetPublished) {
+        try {
+          val updated = createDatasetModel(meta, jobStats, finalCatalogUri, finalDatasetUri, runMode, registry,
+            variablesUri = Some(csvwUri), structuredData = structuredData, distributionUri = Some(finalDistUri))
+          FdpClient.putResource(finalDatasetUri, updated, fdpEmail, fdpPassword, fdpUrl)
+          saveLocalFile(outputDir, "Dataset", updated)
+          logger.info("Dataset updated with healthdcatap:hasVariables -> {}", csvwUri)
+        } catch {
+          case e: Throwable =>
+            // The four layers are already published; losing the back-link is not worth failing the run.
+            logger.warn("Could not add healthdcatap:hasVariables to the Dataset ({}). " +
+              "Catalog, Dataset, Distribution and CSVW are published. Cause: {}", finalDatasetUri, e.getMessage)
+        }
+      }
       logger.info("Metadata Generation and FDP Validations are Successfully Completed")
     } else {
       logger.info("Metadata Generation is Successfully Completed")
     }
 
     finalCatalogUri
+  }
+
+  /**
+   * Moves a created resource out of DRAFT. Failures are logged, not thrown: the resource exists either
+   * way, and a demonstrator run should not abort because a state change was refused.
+   */
+  private def publish(uri: String, fdpEmail: String, fdpPassword: String, fdpUrl: String, keepDrafts: Boolean): Boolean = {
+    if (keepDrafts) return false
+    try {
+      FdpClient.publishResource(uri, fdpEmail, fdpPassword, fdpUrl)
+      true
+    } catch {
+      case e: Throwable =>
+        logger.warn("Could not publish {} - it stays in DRAFT. Cause: {}", uri, e.getMessage)
+        false
+    }
   }
 
   /**
@@ -404,9 +556,10 @@ object MetadataWriter {
    * @param isFdpMode  Boolean indicating if FDP mode is active to add isPartOf links.
    * @param fdpUrl     The FDP server base URL.
    * @param runMode    The current application run mode.
+   * @param linkToFdpRoot Add `dct:isPartOf <fdpUrl>` (FDP mode only).
    * @return A populated Jena Model.
    */
-  private def createCatalogModel(meta: MetadataUserInput, stats: DatasetStats, subjectUri: String, isFdpMode: Boolean, fdpUrl: String, runMode: String, registry: OrganizationRegistry): Model = {
+  private def createCatalogModel(meta: MetadataUserInput, stats: DatasetStats, subjectUri: String, isFdpMode: Boolean, fdpUrl: String, runMode: String, registry: OrganizationRegistry, linkToFdpRoot: Boolean = true): Model = {
     val m = createModel()
     val catalog = createSubject(m, subjectUri).addProperty(RDF.`type`, DCAT.Catalog)
 
@@ -416,7 +569,7 @@ object MetadataWriter {
 
     meta.catalog.title.foreach(catalog.addProperty(DCTerms.title, _))
     meta.catalog.description.foreach(catalog.addProperty(DCTerms.description, _))
-    meta.catalog.applicableLegislation.foreach(al => catalog.addProperty(DCATAP.applicableLegislation, safeRes(m, al).addProperty(RDF.`type`, m.createResource(LEGAL_RESOURCE))))
+    meta.catalog.applicableLegislation.foreach(al => addLegalResources(m, catalog, al))
 
     val catStart = if (!isExcel && stats.startDate.isDefined) stats.startDate else meta.catalog.temporalCoverage.flatMap(_.start)
     val catEnd = if (!isExcel && stats.endDate.isDefined) stats.endDate else meta.catalog.temporalCoverage.flatMap(_.end)
@@ -433,7 +586,7 @@ object MetadataWriter {
 
     meta.catalog.releaseDate.filter(_.matches("\\d{4}-\\d{2}-\\d{2}")).foreach(d => catalog.addProperty(DCTerms.issued, m.createTypedLiteral(d, XSDDatatype.XSDdate)))
     meta.catalog.modificationDate.filter(_.matches("\\d{4}-\\d{2}-\\d{2}")).foreach(d => catalog.addProperty(DCTerms.modified, m.createTypedLiteral(d, XSDDatatype.XSDdate)))
-    meta.catalog.licence.foreach(l => catalog.addProperty(DCTerms.license, safeRes(m, l).addProperty(RDF.`type`, DCTerms.LicenseDocument)))
+    meta.catalog.licence.foreach(l => catalog.addProperty(DCTerms.license, licenseDocument(m, l)))
     meta.catalog.homepage.foreach(h => catalog.addProperty(FOAF.homepage, safeRes(m, h).addProperty(RDF.`type`, FOAF.Document)))
     meta.catalog.rights.foreach(r => catalog.addProperty(DCTerms.rights, m.createResource().addProperty(RDF.`type`, DCTerms.RightsStatement).addProperty(DCTerms.description, r)))
     meta.catalog.language.foreach(langs => langs.foreach(l => catalog.addProperty(DCTerms.language, safeRes(m, l).addProperty(RDF.`type`, DCTerms.LinguisticSystem))))
@@ -447,8 +600,32 @@ object MetadataWriter {
     agents.resolve(meta.catalog.publisherRef, "Catalog.publisher")
       .foreach(publisher => catalog.addProperty(DCTerms.publisher, agents.emit(publisher, requireContact = true)))
 
-    if (isFdpMode && fdpUrl.nonEmpty) catalog.addProperty(DCTerms.isPartOf, safeRes(m, fdpUrl))
+    if (linkToFdpRoot && isFdpMode && fdpUrl.nonEmpty) catalog.addProperty(DCTerms.isPartOf, safeRes(m, fdpUrl))
     m
+  }
+
+  /**
+   * Emits a dct:LicenseDocument
+   */
+  private def licenseDocument(m: Model, licenceUri: String): Resource = {
+    val node = safeRes(m, licenceUri).addProperty(RDF.`type`, DCTerms.LicenseDocument)
+    val lower = licenceUri.toLowerCase
+    val (licenceType, licenceLabel) =
+      if (lower.contains("publicdomain") || lower.contains("/zero/")) ("PublicDomain", "Public domain")
+      else if (lower.contains("by-nc")) ("NonCommercialUse", "Non commercial use only")
+      else if (lower.contains("by-nd")) ("NoDerivativeWork", "No derivative work")
+      else if (lower.contains("by-sa")) ("ShareAlike", "Share alike")
+      else if (lower.contains("/by/") || lower.contains("by-4")) ("Attribution", "Attribution")
+      else ("UnknownIPR", "Unknown IPR")
+    if (!node.hasProperty(DCTerms.`type`)) {
+      // skos:prefLabel is not decoration: any skos:Concept without one is rejected by the FDP's
+      // Resource shape, which would fail the whole publish.
+      node.addProperty(DCTerms.`type`, m.createResource(ADMS_LICENCE_TYPE_NS + licenceType)
+        .addProperty(RDF.`type`, SKOS.Concept)
+        .addProperty(SKOS.prefLabel, m.createLiteral(licenceLabel, "en"))
+        .addProperty(SKOS.inScheme, m.createResource(ADMS_LICENCE_TYPE_SCHEME)))
+    }
+    node
   }
 
   /**
@@ -461,12 +638,12 @@ object MetadataWriter {
    */
   private def populateDistribution(m: Model, dist: Resource, distMeta: DistributionMetadataUserInput): Unit = {
     distMeta.accessURL.foreach(url => dist.addProperty(DCAT.accessURL, safeRes(m, url)))
-    distMeta.applicableLegislation.foreach(al => dist.addProperty(DCATAP.applicableLegislation, safeRes(m, al).addProperty(RDF.`type`, m.createResource(LEGAL_RESOURCE))))
+    distMeta.applicableLegislation.foreach(al => addLegalResources(m, dist, al))
     distMeta.format.foreach(fmt => dist.addProperty(DCTerms.format, safeRes(m, fmt).addProperty(RDF.`type`, m.createResource(MEDIA_TYPE_EXTENT))))
 
     distMeta.title.foreach(dist.addProperty(DCTerms.title, _))
     distMeta.description.foreach(dist.addProperty(DCTerms.description, _))
-    distMeta.license.foreach(lic => dist.addProperty(DCTerms.license, safeRes(m, lic).addProperty(RDF.`type`, DCTerms.LicenseDocument)))
+    distMeta.license.foreach(lic => dist.addProperty(DCTerms.license, licenseDocument(m, lic)))
     distMeta.availability.foreach(av => dist.addProperty(DCATAP.availability, safeRes(m, av)))
     distMeta.byteSize.foreach(bs => dist.addProperty(DCAT.byteSize, m.createTypedLiteral(bs.toLong, XSDDatatype.XSDnonNegativeInteger)))
 
@@ -481,8 +658,10 @@ object MetadataWriter {
       dist.addProperty(m.createProperty("http://spdx.org/rdf/terms#checksum"), checksumRes)
     }
 
-    distMeta.mediaType.foreach(mt => dist.addProperty(DCAT.mediaType, safeRes(m, mt).addProperty(RDF.`type`, m.createResource(MEDIA_TYPE))))
-    distMeta.packagingFormat.foreach(pf => dist.addProperty(DCAT.packageFormat, safeRes(m, pf).addProperty(RDF.`type`, m.createResource(MEDIA_TYPE))))
+    distMeta.mediaType.foreach(mt => dist.addProperty(DCAT.mediaType,
+      safeRes(m, ianaMediaType(mt, "Distribution.mediaType")).addProperty(RDF.`type`, m.createResource(MEDIA_TYPE))))
+    distMeta.packagingFormat.foreach(pf => dist.addProperty(DCAT.packageFormat,
+      safeRes(m, ianaMediaType(pf, "Distribution.packageFormat")).addProperty(RDF.`type`, m.createResource(MEDIA_TYPE))))
     distMeta.releaseDate.filter(_.matches("\\d{4}-\\d{2}-\\d{2}")).foreach(rd => dist.addProperty(DCTerms.issued, m.createTypedLiteral(rd, XSDDatatype.XSDdate)))
     distMeta.rights.foreach(r => dist.addProperty(DCTerms.rights, m.createResource().addProperty(RDF.`type`, DCTerms.RightsStatement).addProperty(DCTerms.description, r)))
     distMeta.spatialResolution.foreach(sr => dist.addProperty(DCAT.spatialResolutionInMeters, m.createTypedLiteral(sr, XSDDatatype.XSDdecimal)))
@@ -490,6 +669,23 @@ object MetadataWriter {
 
     distMeta.temporalResolution.filter(_.matches("^P.*")).foreach(tr => dist.addProperty(DCAT.temporalResolution, m.createTypedLiteral(tr, XSDDatatype.XSDduration)))
     distMeta.accessService.foreach(as => dist.addProperty(DCAT.accessService, safeRes(m, as)))
+    distMeta.language.foreach(l => dist.addProperty(DCTerms.language, safeRes(m, l).addProperty(RDF.`type`, DCTerms.LinguisticSystem)))
+    distMeta.documentation.foreach(d => dist.addProperty(FOAF.page, safeRes(m, d).addProperty(RDF.`type`, FOAF.Document)))
+    distMeta.compressionFormat.foreach(cf => dist.addProperty(m.createProperty(DCAT.NS + "compressFormat"),
+      safeRes(m, ianaMediaType(cf, "Distribution.compressFormat")).addProperty(RDF.`type`, m.createResource(MEDIA_TYPE))))
+    distMeta.downloadURL.foreach(url => dist.addProperty(m.createProperty(DCAT.NS + "downloadURL"), safeRes(m, url)))
+    distMeta.linkedSchemas.foreach(_.split("[;,\\n]").map(_.trim).filter(_.nonEmpty).foreach(ls =>
+      dist.addProperty(DCTerms.conformsTo, safeRes(m, ls).addProperty(RDF.`type`, DCTerms.Standard))))
+    distMeta.modificationDate.filter(_.matches("\\d{4}-\\d{2}-\\d{2}")).foreach(md => dist.addProperty(DCTerms.modified, m.createTypedLiteral(md, XSDDatatype.XSDdate)))
+    distMeta.obligation.map(_.trim).filter(_.nonEmpty).foreach { ob =>
+      val duty = m.createResource()
+        .addProperty(RDF.`type`, m.createResource(ODRL_NS + "Duty"))
+        .addProperty(RDFS.label, m.createLiteral(ob, "en"))
+      val policy = m.createResource()
+        .addProperty(RDF.`type`, m.createResource(ODRL_NS + "Policy"))
+        .addProperty(m.createProperty(ODRL_NS + "obligation"), duty)
+      dist.addProperty(m.createProperty(ODRL_NS + "hasPolicy"), policy)
+    }
   }
 
   /**
@@ -521,7 +717,7 @@ object MetadataWriter {
    * @param runMode    The active run mode defining dynamic fallback behavior.
    * @return A populated Jena Model.
    */
-  private def createDatasetModel(meta: MetadataUserInput, stats: DatasetStats, catalogUri: String, subjectUri: String, runMode: String, registry: OrganizationRegistry): Model = {
+  private def createDatasetModel(meta: MetadataUserInput, stats: DatasetStats, catalogUri: String, subjectUri: String, runMode: String, registry: OrganizationRegistry, variablesUri: Option[String] = None, structuredData: Boolean = false, distributionUri: Option[String] = None): Model = {
     val m = createModel()
     val dataset = createSubject(m, subjectUri)
       .addProperty(RDF.`type`, DCAT.Dataset)
@@ -533,13 +729,18 @@ object MetadataWriter {
     meta.dataset.theme.foreach(t => dataset.addProperty(DCAT.theme, safeRes(m, t)))
     meta.dataset.title.foreach(dataset.addProperty(DCTerms.title, _))
     meta.dataset.description.foreach(dataset.addProperty(DCTerms.description, _))
-    meta.dataset.provenance.foreach(dataset.addProperty(DCTerms.provenance, _))
+    // dct:provenance takes a dct:ProvenanceStatement
+    meta.dataset.provenance.map(_.trim).filter(_.nonEmpty).foreach { statement =>
+      dataset.addProperty(DCTerms.provenance, m.createResource()
+        .addProperty(RDF.`type`, DCTerms.ProvenanceStatement)
+        .addProperty(RDFS.label, m.createLiteral(statement, "en")))
+    }
     meta.dataset.version.foreach(dataset.addProperty(m.createProperty("http://www.w3.org/ns/dcat#version"), _))
-    meta.dataset.applicableLegislation.foreach(al => dataset.addProperty(DCATAP.applicableLegislation, safeRes(m, al).addProperty(RDF.`type`, m.createResource(LEGAL_RESOURCE))))
+    meta.dataset.applicableLegislation.foreach(al => addLegalResources(m, dataset, al))
     meta.dataset.accessRights.foreach(ar => dataset.addProperty(DCTerms.accessRights, safeRes(m, ar).addProperty(RDF.`type`, DCTerms.RightsStatement)))
     meta.dataset.frequency.foreach(f => dataset.addProperty(DCTerms.accrualPeriodicity, safeRes(m, f).addProperty(RDF.`type`, DCTerms.Frequency)))
 
-    meta.dataset.identifier.foreach(id => dataset.addProperty(DCTerms.identifier, m.createTypedLiteral(id.replaceAll("\\s+", ""), XSDDatatype.XSDanyURI)))
+    meta.dataset.identifier.foreach(id => dataset.addProperty(DCTerms.identifier, id.replaceAll("\\s+", "")))
 
     meta.dataset.keyword.foreach(_.foreach(kw => dataset.addProperty(DCAT.keyword, kw)))
     meta.dataset.spatial.foreach(_.foreach(sp => dataset.addProperty(DCTerms.spatial, safeRes(m, sp).addProperty(RDF.`type`, DCTerms.Location))))
@@ -573,6 +774,11 @@ object MetadataWriter {
 
     meta.dataset.populationCoverage.foreach(dataset.addLiteral(HealthDCATAP.populationCoverage, _))
 
+    dataset.addLiteral(HealthDCATAP.hasStructuredData, m.createTypedLiteral(structuredData, XSDDatatype.XSDboolean))
+    variablesUri.filter(_.trim.nonEmpty).foreach(uri => dataset.addProperty(HealthDCATAP.hasVariables, m.createResource(uri)))
+
+    distributionUri.filter(_.trim.nonEmpty).foreach(uri => dataset.addProperty(DCAT.distribution, m.createResource(uri)))
+
     val numRec = if (!isExcel && stats.recordCount > 0) stats.recordCount else meta.dataset.numRecords.map(_.toLong).getOrElse(0L)
     val numPat = if (!isExcel && stats.uniquePatients > 0) stats.uniquePatients else meta.dataset.numUniqueIndividual.map(_.toLong).getOrElse(0L)
     val minA = if (!isExcel && stats.minAge > 0) stats.minAge else meta.dataset.minAge.getOrElse(0)
@@ -592,19 +798,63 @@ object MetadataWriter {
     agents.resolve(meta.dataset.hdabRef, "Dataset.hdab")
       .foreach(hdabAgent => dataset.addProperty(HealthDCATAP.hdab, agents.emit(hdabAgent, requireContact = true)))
 
+    // geodcatap:custodian - the party responsible for holding the data, distinct from the publisher.
+    agents.resolve(meta.dataset.custodianRef, "Dataset.custodian")
+      .foreach(custodian => dataset.addProperty(GEODCATAP.custodian, agents.emit(custodian, requireContact = true)))
+
+    // dqv:hasQualityAnnotation expects a dqv:QualityCertificate pointing back at the dataset
+    Option(meta.dataset.qualityAnnotation).map(_.trim).filter(_.nonEmpty).foreach { qa =>
+      val certificate = m.createResource()
+        .addProperty(RDF.`type`, DQV.QualityCertificate)
+        .addProperty(OA.hasTarget, dataset)
+        .addProperty(OA.motivatedBy, DQV.qualityAssessment)
+      if (isAbsoluteIri(qa)) certificate.addProperty(OA.hasBody, safeRes(m, qa))
+      else certificate.addProperty(RDFS.label, m.createLiteral(qa, "en"))
+      dataset.addProperty(DQV.hasQualityAnnotation, certificate)
+    }
+
     // --- OPTIONALS ---
-    meta.dataset.conformsTo.foreach(c => dataset.addProperty(DCTerms.conformsTo, safeRes(m, c).addProperty(RDF.`type`, DCTerms.Standard)))
+    meta.dataset.conformsTo.map(_.trim).filter(_.nonEmpty).foreach { c =>
+      HealthDataEuNal.standard(c) match {
+        case Some(value) =>
+          dataset.addProperty(DCTerms.conformsTo,
+            nalConcept(m, value, HealthDataEuNal.STANDARD_SCHEME, DCTerms.Standard))
+        case None =>
+          logger.warn("dct:conformsTo value '{}' has no HealthData@EU standard concept. It is emitted " +
+            "unchanged, and it will fail the R7 :ConformsToRestriction at sh:Violation severity.", c)
+          dataset.addProperty(DCTerms.conformsTo, safeRes(m, c).addProperty(RDF.`type`, DCTerms.Standard))
+      }
+    }
     meta.dataset.documentation.foreach(d => dataset.addProperty(FOAF.page, safeRes(m, d).addProperty(RDF.`type`, FOAF.Document)))
     meta.dataset.alternative.foreach(_.foreach(a => dataset.addProperty(DCTerms.alternative, a)))
 
-    val finalCodingSystems = if (!isExcel && stats.codingSystems.nonEmpty) stats.codingSystems else meta.dataset.codingSystems.getOrElse(Seq.empty)
-    finalCodingSystems.foreach(cs => dataset.addProperty(HealthDCATAP.hasCodingSystem, safeRes(m, cs)))
-
+    // Anything without a scheme is dropped rather than being emitted as a relative IRI.
+    val candidateCodingSystems =
+      if (!isExcel && stats.codingSystems.nonEmpty) stats.codingSystems
+      else meta.dataset.codingSystems.getOrElse(Seq.empty)
+    val (usableCodingSystems, rejectedCodingSystems) =
+      candidateCodingSystems.map(_.trim).filter(_.nonEmpty).distinct.partition(isAbsoluteIri)
+    if (rejectedCodingSystems.nonEmpty) {
+      logger.warn("Ignoring {} coding system value(s) that are not absolute IRIs: {}",
+        rejectedCodingSystems.size, rejectedCodingSystems.mkString(", "))
+    }
+    val (mappedCodingSystems, unmappedCodingSystems) =
+      usableCodingSystems.map(cs => cs -> HealthDataEuNal.codingSystem(cs)).partition(_._2.isDefined)
+    if (unmappedCodingSystems.nonEmpty) {
+      logger.warn("{} coding system(s) have no HealthData@EU concept. They are emitted unchanged, and " +
+        "each one will fail the R7 :HasCodingSystemRestriction at sh:Violation severity: {}",
+        unmappedCodingSystems.size, unmappedCodingSystems.map(_._1).mkString(", "))
+    }
+    val conformingCodingSystems = mappedCodingSystems.flatMap(_._2).distinct
+    conformingCodingSystems.foreach(cs => dataset.addProperty(HealthDCATAP.hasCodingSystem,
+      nalConcept(m, cs, HealthDataEuNal.CODING_SYSTEM_SCHEME, DCTerms.Standard)))
+    unmappedCodingSystems.map(_._1).distinct
+      .filterNot(conformingCodingSystems.contains)
+      .foreach(cs => dataset.addProperty(HealthDCATAP.hasCodingSystem,
+        safeRes(m, cs).addProperty(RDF.`type`, DCTerms.Standard)))
     meta.dataset.codeValues.foreach { codes =>
-      codes.foreach { cv =>
-        val concept = m.createResource().addProperty(RDF.`type`, SKOS.Concept).addProperty(SKOS.notation, cv.notation).addProperty(SKOS.prefLabel, m.createLiteral(cv.label, "en"))
-        cv.scheme.foreach(s => concept.addProperty(SKOS.inScheme, safeRes(m, s)))
-        dataset.addProperty(HealthDCATAP.hasCodeValues, concept)
+      codes.map(_.notation.trim).filter(_.nonEmpty).distinct.foreach { notation =>
+        dataset.addProperty(HealthDCATAP.hasCodeValues, m.createLiteral(notation))
       }
     }
 
@@ -615,7 +865,11 @@ object MetadataWriter {
       dataset.addProperty(HealthDCATAP.retentionPeriod, temp)
     }
 
-    meta.dataset.personalData.foreach(_.foreach(pd => dataset.addProperty(DPV.hasPersonalData, safeRes(m, pd))))
+    // DPV-PD terms are referenced by IRI, so the shape's dpv:PersonalData class check only passes
+    // if the graph says what they are.
+    meta.dataset.personalData.foreach(_.foreach { pd =>
+      dataset.addProperty(DPV.hasPersonalData, safeRes(m, pd.trim).addProperty(RDF.`type`, DPV.PersonalData))
+    })
     meta.dataset.landingPage.foreach(lp => dataset.addProperty(DCAT.landingPage, safeRes(m, lp).addProperty(RDF.`type`, FOAF.Document)))
     meta.dataset.language.foreach(l => dataset.addProperty(DCTerms.language, safeRes(m, l).addProperty(RDF.`type`, DCTerms.LinguisticSystem)))
     meta.dataset.modificationDate.filter(_.matches("\\d{4}-\\d{2}-\\d{2}")).foreach(md => dataset.addProperty(DCTerms.modified, m.createTypedLiteral(md, XSDDatatype.XSDdate)))
@@ -633,7 +887,11 @@ object MetadataWriter {
       // The attribution's name cell holds an Organization ID.
       attr.addProperty(PROV.agent, agents.emit(
         agents.resolve(Some(qa.name), "Dataset.qualifiedAttribution").get))
-      qa.role.foreach(r => attr.addProperty(DCAT.hadRole, safeRes(m, r)))
+      // dcat:hadRole takes an IRI from a controlled vocabulary. A word such as "sponsor" would be resolved to file:///.../sponsor.
+      qa.role.map(_.trim).filter(_.nonEmpty).foreach { r =>
+        if (isAbsoluteIri(r)) attr.addProperty(DCAT.hadRole, safeRes(m, r))
+        else logger.warn("Dataset.qualifiedAttribution role '{}' is not an absolute IRI; dcat:hadRole omitted.", r)
+      }
       dataset.addProperty(PROV.qualifiedAttribution, attr)
     })
 
@@ -641,7 +899,22 @@ object MetadataWriter {
     meta.dataset.temporalResolution.filter(_.matches("^P.*")).foreach(tr => dataset.addProperty(DCAT.temporalResolution, m.createTypedLiteral(tr, XSDDatatype.XSDduration)))
     meta.dataset.versionNotes.foreach(vn => dataset.addProperty(ADMS.versionNotes, vn))
     meta.dataset.wasGeneratedBy.foreach(_.foreach(wg => dataset.addProperty(PROV.wasGeneratedBy, safeRes(m, wg).addProperty(RDF.`type`, PROV.Activity))))
-    meta.dataset.purpose.foreach(p => dataset.addProperty(DPV.hasPurpose, p))
+    // dpv:hasPurpose and dpv:hasLegalBasis take typed nodes carrying the text as dct:description
+    meta.dataset.purpose.map(_.trim).filter(_.nonEmpty).foreach { p =>
+      dataset.addProperty(DPV.hasPurpose, m.createResource()
+        .addProperty(RDF.`type`, DPV.Purpose)
+        .addProperty(DCTerms.description, m.createLiteral(p, "en")))
+    }
+
+    meta.dataset.legalBasis.map(_.trim).filter(_.nonEmpty).foreach { lb =>
+      val node = m.createResource()
+        .addProperty(RDF.`type`, DPV.LegalBasis)
+        .addProperty(DCTerms.description, m.createLiteral(lb, "en"))
+      meta.dataset.applicableLegislation.toSeq
+        .flatMap(legalResourceValues)
+        .foreach(al => node.addProperty(DCTerms.source, safeRes(m, al)))
+      dataset.addProperty(DPV.hasLegalBasis, node)
+    }
 
     agents.resolve(meta.dataset.creatorRef, "Dataset.creator")
       .foreach(creator => dataset.addProperty(DCTerms.creator, agents.emit(creator)))
@@ -655,7 +928,8 @@ object MetadataWriter {
     meta.dataset.analytics.foreach { a =>
       val analyticsDist = m.createResource().addProperty(RDF.`type`, DCAT.Distribution)
       populateDistribution(m, analyticsDist, a)
-      dataset.addProperty(DCTerms.relation, analyticsDist)
+      // Dedicated property for the analytics distribution
+      dataset.addProperty(HealthDCATAP.analytics, analyticsDist)
     }
 
     m
@@ -667,11 +941,11 @@ object MetadataWriter {
    *
    * @param stats      DatasetStats containing the column definitions extracted from the dataframe.
    * @param subjectUri The URI assigned to the CSVW Resource by the FDP server.
-   * @param parentUri  The URI of the parent Distribution (for dct:isPartOf linking).
+   * @param parentUri  The URI of the parent Dataset (dct:isPartOf)
    * @param vocabBase  Base URI for csvw:propertyUrl values.
    * @return A populated Jena Model representing the CSVW schema.
    */
-  private def createCsvwModel(stats: DatasetStats, subjectUri: String, parentUri: String, vocabBase: String): Model = {
+  private def createCsvwModel(stats: DatasetStats, subjectUri: String, parentUri: String, vocabBase: String, csvUrl: Option[String] = None): Model = {
     val m = createModel()
 
     val tableGroup = createSubject(m, subjectUri)
@@ -686,7 +960,10 @@ object MetadataWriter {
     val table = m.createResource("urn:uuid:" + UUID.randomUUID())
       .addProperty(RDF.`type`, CSVW.Table)
       .addProperty(DCTerms.title, m.createLiteral("Tabular Data", "en"))
-      .addProperty(m.createProperty(CSVW.NS + "url"), m.createResource("file:///dataset.csv"))
+
+    // csvw:url is 0..1. It points at the CSV the schema describes, so it takes the distribution's access URL. Omitted when none is configured, rather than emitting a placeholder.
+    csvUrl.map(_.trim).filter(u => u.nonEmpty && isAbsoluteIri(u))
+      .foreach(u => table.addProperty(m.createProperty(CSVW.NS + "url"), m.createResource(u)))
 
     tableGroup.addProperty(CSVW.table, table)
 
@@ -703,8 +980,7 @@ object MetadataWriter {
       if (stats.columnToVocabId.contains(colName)) {
         val shortId = stats.columnToVocabId(colName)
         if (stats.vocabularies.contains(shortId)) {
-          val propertyUrlPredicate = m.createProperty("http://www.w3.org/ns/csvw#propertyUrl")
-          col.addProperty(propertyUrlPredicate, m.createResource(s"$vocabBase/$shortId"))
+          col.addProperty(CSVW.propertyUrl, m.createResource(s"$vocabBase/$shortId"))
         }
       }
 
@@ -757,7 +1033,7 @@ object MetadataWriter {
    * @param vocabBase Base URI used for emitted SKOS scheme + concept URIs.
    * @return A populated Jena Model representing the dictionary as a CSVW schema with SKOS vocabularies.
    */
-  def createDictionaryModel(fields: List[CsvwField], vocabularies: Map[String, Map[String, String]] = Map.empty, subjectUri: String = "", parentDistributionUri: String = "", vocabBase: String = DEFAULT_VOCAB_BASE, registry: OrganizationRegistry = OrganizationRegistry.empty(DEFAULT_VOCAB_BASE)): Model = {
+  def createDictionaryModel(fields: List[CsvwField], vocabularies: Map[String, Map[String, String]] = Map.empty, subjectUri: String = "", parentDatasetUri: String = "", vocabBase: String = DEFAULT_VOCAB_BASE, registry: OrganizationRegistry = OrganizationRegistry.empty(DEFAULT_VOCAB_BASE)): Model = {
     val m = createModel()
     val qudtUnit = m.createProperty("http://qudt.org/schema/qudt/unit")
 
@@ -781,8 +1057,8 @@ object MetadataWriter {
       .addProperty(DCTerms.title, m.createLiteral("Data Dictionary Schema", "en"))
       .addProperty(DCTerms.description, m.createLiteral("CSVW schema describing the variables defined in the data dictionary.", "en"))
 
-    if (parentDistributionUri.nonEmpty) {
-      tableGroup.addProperty(DCTerms.isPartOf, m.createResource(parentDistributionUri))
+    if (parentDatasetUri.nonEmpty) {
+      tableGroup.addProperty(DCTerms.isPartOf, m.createResource(parentDatasetUri))
     }
 
     val table = m.createResource(s"urn:uuid:${UUID.randomUUID()}")
@@ -815,7 +1091,7 @@ object MetadataWriter {
       col.addProperty(CSVW.titles, m.createLiteral(f.title, "en"))
       col.addProperty(CSVW.datatype, m.createTypedLiteral(f.datatype, XSDDatatype.XSDstring))
       f.description.foreach(d => col.addProperty(DCTerms.description, m.createLiteral(d, "en")))
-      f.propertyUrl.filter(_.nonEmpty).foreach(p => col.addProperty(CSVW.propertyURL, m.createResource(p)))
+      f.propertyUrl.filter(_.nonEmpty).foreach(p => col.addProperty(CSVW.propertyUrl, m.createResource(p)))
       f.unit.filter(_.nonEmpty).foreach(u => col.addProperty(qudtUnit, u))
 
       // Repetition Period -> dcat:temporalResolution

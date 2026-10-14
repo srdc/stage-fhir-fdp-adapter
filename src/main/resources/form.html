@@ -139,6 +139,14 @@
 
     <h2>Dataset</h2>
     <div class="field">
+        <label>Existing?</label>
+        <input onchange="toggleExistingDataset(this.checked)" type="checkbox" name="existingDataset">
+    </div>
+    <div class="field hidden existing-dataset-field required">
+        <label>URI</label>
+        <input name="datasetUri" placeholder="http://localhost:8080/dataset/&lt;uuid&gt;">
+    </div>
+    <div class="field">
         <label>Title<i style="color: red">*</i></label>
         <input name="title" required placeholder="{{title}}">
     </div>
@@ -164,6 +172,10 @@
     <div class="field">
         <label>Provenance<i style="color: red">*</i></label>
         <textarea name="provenance" required placeholder="{{provenance}}"></textarea>
+    </div>
+    <div class="field">
+        <label>Legal Basis</label>
+        <textarea name="legalBasis" placeholder="Legal ground for processing, e.g. the EHDS secondary-use authorisation"></textarea>
     </div>
     <div class="field">
         <label>
@@ -229,6 +241,15 @@
     <div class="field">
         <label>Creator (organization)</label>
         <select name="datasetCreatorOrg" class="org-ref"></select>
+    </div>
+
+    <div class="field">
+        <label>Structured data
+            <span class="desc">HealthDCAT-AP R7. Tick when the dataset can be described variable by
+                variable; the CSVW variables description is then published and linked with
+                healthdcatap:hasVariables. Leave unticked to let it be derived.</span>
+        </label>
+        <input type="checkbox" name="datasetStructuredData" checked>
     </div>
 
     <div class="field">
@@ -352,15 +373,25 @@
             select.innerHTML = '';
             var none = document.createElement('option');
             none.value = '';
-            none.textContent = options.length ? '— none / enter manually —' : '— no organizations defined —';
+            none.textContent = options.length ? '- none / enter manually -' : '- no organizations defined -';
             select.appendChild(none);
             options.forEach(function (o) {
                 var option = document.createElement('option');
                 option.value = o.id;
-                option.textContent = o.name ? (o.id + ' — ' + o.name) : o.id;
+                option.textContent = o.name ? (o.id + ' - ' + o.name) : o.id;
                 select.appendChild(option);
             });
             select.value = options.some(function (o) { return o.id === previous; }) ? previous : '';
+        });
+    }
+
+    function toggleExistingDataset(value) {
+        document.querySelectorAll(".existing-dataset-field").forEach(item => {
+            item.classList.toggle('hidden', !value);
+            item.querySelectorAll('input,textarea').forEach(input => {
+                if (value && item.classList.contains('required')) input.setAttribute('required', true)
+                else input.removeAttribute('required')
+            })
         });
     }
 

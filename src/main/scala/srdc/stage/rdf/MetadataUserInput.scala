@@ -61,10 +61,19 @@ case class DistributionMetadataUserInput(
                                           spatialResolution: Option[Double] = None,
                                           status: Option[String] = None,
                                           temporalResolution: Option[String] = None,
-                                          accessService: Option[String] = None
+                                          accessService: Option[String] = None,
+                                          language: Option[String] = None,
+                                          documentation: Option[String] = None,
+                                          compressionFormat: Option[String] = None,
+                                          downloadURL: Option[String] = None,
+                                          linkedSchemas: Option[String] = None,
+                                          modificationDate: Option[String] = None,
+                                          obligation: Option[String] = None
                                         )
 
 case class DatasetMetadataUserInput(
+                                     existing: Option[Boolean] = None,
+                                     uri: Option[String] = None,
                                      title: Option[String] = None,
                                      description: Option[String] = None,
                                      identifier: Option[String] = None,
@@ -76,6 +85,7 @@ case class DatasetMetadataUserInput(
                                      publisherRef: Option[String] = None,
                                      creatorRef: Option[String] = None,
                                      hdabRef: Option[String] = None,
+                                     custodianRef: Option[String] = None,
                                      keyword: Option[Seq[String]] = None,
                                      spatial: Option[Seq[String]] = None,
                                      healthCategory: Option[String] = None,
@@ -109,6 +119,8 @@ case class DatasetMetadataUserInput(
                                      versionNotes: Option[String] = None,
                                      wasGeneratedBy: Option[Seq[String]] = None,
                                      purpose: Option[String] = None,
+                                     legalBasis: Option[String] = None,
+                                     structuredData: Option[Boolean] = None,
                                      qualityAnnotation: String = ""
                                    )
 
@@ -181,13 +193,25 @@ object MetadataUserInput {
    * @return A fully populated ConfigLoader object.
    */
   def load(appConfig: AppConfig, jobName: String = "", shared: Option[SharedMetadata] = None): MetadataUserInput = {
-    appConfig.runMode.toLowerCase match {
+    val loaded = appConfig.runMode.toLowerCase match {
       case "json" => loadFromJson(appConfig, jobName)
       case "excel" => loadFromExcel(appConfig, jobName, shared)
       case "browser" => loadFromBrowser(appConfig, jobName, shared)
       case _      => throw new IllegalArgumentException(s"Unknown runMode: ${appConfig.runMode}")
     }
+    applyExistingDatasetOverride(loaded, appConfig)
   }
+
+  /**
+   * --dataset-uri wins over whatever the metadata configuration says
+   */
+  private def applyExistingDatasetOverride(meta: MetadataUserInput, appConfig: AppConfig): MetadataUserInput =
+    appConfig.datasetUri match {
+      case Some(uri) =>
+        logger.info("Existing Dataset requested on the command line: {}", uri)
+        meta.copy(dataset = meta.dataset.copy(existing = Some(true), uri = Some(uri)))
+      case None => meta
+    }
 
   /**
    * Loads configuration directly from a JSON file.
@@ -262,46 +286,46 @@ object MetadataUserInput {
     logger.info("Fetching EU Vocabularies. This might take a few seconds...")
 
     val healthCategories = Map(
-      "http://13.81.34.152:1101/resource/authority/healthcategories/NRPE" -> "Aggregated data on healthcare needs, resources allocated to healthcare, the provision of and access to healthcare, healthcare expenditure and financing",
-      "http://13.81.34.152:1101/resource/authority/healthcategories/EHCT" -> "Data from clinical trials, clinical studies, clinical investigations and performance studies subject to Regulation (EU) No 536/2014, Regulation (EU) 2024/1938 of the European Parliament and of the Council34, Regulation (EU) 2017/745 and Regulation (EU) 2017/746",
-      "http://13.81.34.152:1101/resource/authority/healthcategories/MRMR" -> "Data from medical registries and mortality registries",
-      "http://13.81.34.152:1101/resource/authority/healthcategories/PHDR" -> "Data from population-based health data registries such as public health registries",
-      "http://13.81.34.152:1101/resource/authority/healthcategories/RMMD" -> "Data from registries for medicinal products and medical devices",
-      "http://13.81.34.152:1101/resource/authority/healthcategories/RQSH" -> "Data from research cohorts, questionnaires and surveys related to health, after the first publication of the related results",
-      "http://13.81.34.152:1101/resource/authority/healthcategories/WELA" -> "Data from wellness applications",
-      "http://13.81.34.152:1101/resource/authority/healthcategories/DIOH" -> "Data on factors impacting on health, including socio-economic, environmental and behavioural determinants of health",
-      "http://13.81.34.152:1101/resource/authority/healthcategories/RPDG" -> "Data on pathogens that impact human health",
-      "http://13.81.34.152:1101/resource/authority/healthcategories/IDHP" -> "Data on professional status, and on the specialisation and institution of health professionals involved in the treatment of a natural person",
-      "http://13.81.34.152:1101/resource/authority/healthcategories/EHRS" -> "Electronic Health Data from EHRs",
-      "http://13.81.34.152:1101/resource/authority/healthcategories/EINS" -> "Health data from biobanks and associated databases",
-      "http://13.81.34.152:1101/resource/authority/healthcategories/HRAD" -> "Healthcare-related administrative data, including on dispensations, reimbursement claims and reimbursements",
-      "http://13.81.34.152:1101/resource/authority/healthcategories/HGPD" -> "Human genetic, epigenomic and genomic data",
-      "http://13.81.34.152:1101/resource/authority/healthcategories/EMRD" -> "Other health data from medical devices",
-      "http://13.81.34.152:1101/resource/authority/healthcategories/HPML" -> "Other human molecular data such as proteomic, transcriptomic, metabolomic, lipidomic and other omic data",
-      "http://13.81.34.152:1101/resource/authority/healthcategories/PGEH" -> "Personal electronic health data automatically generated through medical devices"
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/healthcategories/NRPE" -> "Aggregated data on healthcare needs, resources allocated to healthcare, the provision of and access to healthcare, healthcare expenditure and financing",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/healthcategories/EHCT" -> "Data from clinical trials, clinical studies, clinical investigations and performance studies subject to Regulation (EU) No 536/2014, Regulation (EU) 2024/1938 of the European Parliament and of the Council34, Regulation (EU) 2017/745 and Regulation (EU) 2017/746",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/healthcategories/MRMR" -> "Data from medical registries and mortality registries",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/healthcategories/PHDR" -> "Data from population-based health data registries such as public health registries",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/healthcategories/RMMD" -> "Data from registries for medicinal products and medical devices",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/healthcategories/RQSH" -> "Data from research cohorts, questionnaires and surveys related to health, after the first publication of the related results",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/healthcategories/WELA" -> "Data from wellness applications",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/healthcategories/DIOH" -> "Data on factors impacting on health, including socio-economic, environmental and behavioural determinants of health",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/healthcategories/RPDG" -> "Data on pathogens that impact human health",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/healthcategories/IDHP" -> "Data on professional status, and on the specialisation and institution of health professionals involved in the treatment of a natural person",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/healthcategories/EHRS" -> "Electronic Health Data from EHRs",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/healthcategories/EINS" -> "Health data from biobanks and associated databases",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/healthcategories/HRAD" -> "Healthcare-related administrative data, including on dispensations, reimbursement claims and reimbursements",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/healthcategories/HGPD" -> "Human genetic, epigenomic and genomic data",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/healthcategories/EMRD" -> "Other health data from medical devices",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/healthcategories/HPML" -> "Other human molecular data such as proteomic, transcriptomic, metabolomic, lipidomic and other omic data",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/healthcategories/PGEH" -> "Personal electronic health data automatically generated through medical devices"
     )
 
     val healthThemes = Map(
-      "http://13.81.34.152:1101/resource/authority/health-theme/ANTIMICROBIAL_CONTROL" -> "Antimicrobial resistance infection control",
-      "http://13.81.34.152:1101/resource/authority/health-theme/BLOOD_INFECTIONS" -> "Blood-borne sexually transmitted infections",
-      "http://13.81.34.152:1101/resource/authority/health-theme/CANCER_DISEASE" -> "Cancer",
-      "http://13.81.34.152:1101/resource/authority/health-theme/CLIMATE_HEALTH" -> "Climate planetary health",
-      "http://13.81.34.152:1101/resource/authority/health-theme/EMERGENCY_SETTINGS" -> "Emergencies, disasters, travel humanitarian settings",
-      "http://13.81.34.152:1101/resource/authority/health-theme/ENTERIC_INFECTIONS" -> "Enteric, water- food-borne infections",
-      "http://13.81.34.152:1101/resource/authority/health-theme/ENVIRONMENTAL_HEALTH" -> "Environmental, occupational radiation health (incl. WASH urban)",
-      "http://13.81.34.152:1101/resource/authority/health-theme/HEALTH_PRODUCTS" -> "Health products, technologies, data research",
-      "http://13.81.34.152:1101/resource/authority/health-theme/HEALTH_SYSTEMS" -> "Health systems, quality, care models determinants",
-      "http://13.81.34.152:1101/resource/authority/health-theme/IMMUNIZATION_DISEASES" -> "Immunization vaccine-preventable diseases",
-      "http://13.81.34.152:1101/resource/authority/health-theme/INJURY_PREVENTION" -> "Injuries, envenoming drowning",
-      "http://13.81.34.152:1101/resource/authority/health-theme/LIFECOURSE_HEALTH" -> "Life-course health: maternal, newborn, child, adolescent ageing",
-      "http://13.81.34.152:1101/resource/authority/health-theme/MENTAL_HEALTH" -> "Mental, neurological substance use",
-      "http://13.81.34.152:1101/resource/authority/health-theme/TROPICAL_DISEASES" -> "Neglected tropical, parasitic fungal skin diseases",
-      "http://13.81.34.152:1101/resource/authority/health-theme/NONCOMMUNICABLE_DISEASES" -> "Noncommunicable diseases – metabolic cardiopulmonary",
-      "http://13.81.34.152:1101/resource/authority/health-theme/NUTRITION_SECURITY" -> "Nutrition food security",
-      "http://13.81.34.152:1101/resource/authority/health-theme/SENSORY_HEALTH" -> "Oral, eye sensory health",
-      "http://13.81.34.152:1101/resource/authority/health-theme/RESPIRATORY_DISEASES" -> "Respiratory infectious diseases",
-      "http://13.81.34.152:1101/resource/authority/health-theme/REPRODUCTIVE_HEALTH" -> "Sexual reproductive health and rights",
-      "http://13.81.34.152:1101/resource/authority/health-theme/VECTOR_DISEASES" -> "Vector-borne zoonotic viral diseases"
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-theme/ANTIMICROBIAL_CONTROL" -> "Antimicrobial resistance infection control",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-theme/BLOOD_INFECTIONS" -> "Blood-borne sexually transmitted infections",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-theme/CANCER_DISEASE" -> "Cancer",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-theme/CLIMATE_HEALTH" -> "Climate planetary health",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-theme/EMERGENCY_SETTINGS" -> "Emergencies, disasters, travel humanitarian settings",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-theme/ENTERIC_INFECTIONS" -> "Enteric, water- food-borne infections",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-theme/ENVIRONMENTAL_HEALTH" -> "Environmental, occupational radiation health (incl. WASH urban)",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-theme/HEALTH_PRODUCTS" -> "Health products, technologies, data research",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-theme/HEALTH_SYSTEMS" -> "Health systems, quality, care models determinants",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-theme/IMMUNIZATION_DISEASES" -> "Immunization vaccine-preventable diseases",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-theme/INJURY_PREVENTION" -> "Injuries, envenoming drowning",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-theme/LIFECOURSE_HEALTH" -> "Life-course health: maternal, newborn, child, adolescent ageing",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-theme/MENTAL_HEALTH" -> "Mental, neurological substance use",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-theme/TROPICAL_DISEASES" -> "Neglected tropical, parasitic fungal skin diseases",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-theme/NONCOMMUNICABLE_DISEASES" -> "Noncommunicable diseases – metabolic cardiopulmonary",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-theme/NUTRITION_SECURITY" -> "Nutrition food security",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-theme/SENSORY_HEALTH" -> "Oral, eye sensory health",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-theme/RESPIRATORY_DISEASES" -> "Respiratory infectious diseases",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-theme/REPRODUCTIVE_HEALTH" -> "Sexual reproductive health and rights",
+      "https://hdeu-dcat.acceptance.data.health.europa.eu/resource/authority/health-theme/VECTOR_DISEASES" -> "Vector-borne zoonotic viral diseases"
     )
 
     def toHtmlOption(pair: (String, String)) = s"""<option value="${pair._1}">${pair._2}</option>"""
@@ -505,6 +529,8 @@ object MetadataUserInput {
         creatorRef = orgRef("catalogCreatorOrg", "Catalog creator")
       ),
       dataset = DatasetMetadataUserInput(
+        existing = getBool("existingDataset"),
+        uri = getOpt("datasetUri"),
         title = getOpt("title"),
         description = getOpt("description"),
         identifier = getOpt("identifier"),
@@ -512,10 +538,12 @@ object MetadataUserInput {
         populationCoverage = getOpt("populationCoverage"),
         theme = getOpt("theme"),
         provenance = getOpt("provenance"),
+        legalBasis = getOpt("legalBasis"),
         contactPoint = ContactPointMetadataUserInput(page = getOpt("contactPage"), email = getOpt("contactEmail")),
         publisherRef = orgRef("datasetPublisherOrg", "Dataset publisher"),
         creatorRef = orgRef("datasetCreatorOrg", "Dataset creator"),
         hdabRef = Some(hdabRef),
+        custodianRef = orgRef("datasetCustodianOrg", "Dataset custodian"),
         keyword = getOpt("keyword").map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq),
         spatial = getOpt("datasetSpatial").map(Seq(_)),
         healthCategory = getOpt("healthCategory"),
@@ -524,6 +552,7 @@ object MetadataUserInput {
         accessRights = getOpt("accessRights"),
         healthTheme = getOpt("healthTheme"),
         qualityAnnotation = reqStr("datasetQualityAnnotation", "Quality Annotation"),
+        structuredData = getBool("datasetStructuredData"),
         frequency = getOpt("datasetFrequency"),
         temporalCoverage = None, // Handled dynamically via FHIR stats
         sample = getOpt("sampleAccessUrl").map { url =>
@@ -801,6 +830,7 @@ object MetadataUserInput {
         publisherRef = datasetPublisherRef,
         creatorRef = datasetCreatorRef,
         hdabRef = datasetHdabRef,
+        custodianRef = resolveOrgRef(getFormattedOption(datasetSheet, 79), "Dataset.custodian"),
         title = getFormattedOption(datasetSheet, 1),
         description = getFormattedOption(datasetSheet, 2),
         identifier = getFormattedOption(datasetSheet, 3),
@@ -822,16 +852,27 @@ object MetadataUserInput {
         conformsTo = getFormattedOption(datasetSheet, 27),
         documentation = getFormattedOption(datasetSheet, 30),
         frequency = getFormattedOption(datasetSheet, 31),
-        sample = None,
-        analytics = None,
+        sample = getFormattedOption(datasetSheet, 32).map { url =>
+          DistributionMetadataUserInput(
+            accessURL = Some(url),
+            applicableLegislation = getFormattedOption(datasetSheet, 33),
+            title = getFormattedOption(datasetSheet, 34),
+            format = getFormattedOption(datasetSheet, 35)
+          )
+        },
+        analytics = getFormattedOption(datasetSheet, 36).map { url =>
+          DistributionMetadataUserInput(
+            accessURL = Some(url),
+            applicableLegislation = getFormattedOption(datasetSheet, 37),
+            title = getFormattedOption(datasetSheet, 38),
+            format = getFormattedOption(datasetSheet, 39)
+          )
+        },
         alternative = getFormattedOption(datasetSheet, 40).map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq),
-        codeValues = Try(Seq(
-          getCellStr(datasetSheet, 41).split(",", -1),
-          getCellStr(datasetSheet, 42).split(",", -1),
-          getCellStr(datasetSheet, 43).split(",", -1)
-        ).transpose.filter(value => value.size >= 3 && value(1).nonEmpty && value(2).nonEmpty).map {
-          case Seq(scheme, notation, label) => CodeValue(toStringOption(scheme), notation, label)
-        }).toOption,
+        codeValues = {
+          val notations = getCellStr(datasetSheet, 42).split(",").map(_.trim).filter(_.nonEmpty).toSeq
+          if (notations.nonEmpty) Some(notations.map(n => CodeValue(None, n, ""))) else None
+        },
         codingSystems = getFormattedOption(datasetSheet, 44).map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq),
         numRecords = Try(getCellStr(datasetSheet, 45).toDouble.toInt).toOption,
         retentionPeriod = (
@@ -845,7 +886,7 @@ object MetadataUserInput {
         minAge = Try(getCellStr(datasetSheet, 49).toDouble.toInt).toOption,
         numUniqueIndividual = Try(getCellStr(datasetSheet, 50).toDouble.toInt).toOption,
         personalData = getFormattedOption(datasetSheet, 51).map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq
-          .map(pd => s"https://w3c.github.io/dpv/2.0/pd#$pd")),
+          .map(pd => s"https://w3id.org/dpv/dpv-pd#$pd")),
         landingPage = getFormattedOption(datasetSheet, 52),
         language = getFormattedOption(datasetSheet, 53),
         modificationDate = getFormattedOption(datasetSheet, 54),
@@ -868,7 +909,11 @@ object MetadataUserInput {
         temporalResolution = getFormattedOption(datasetSheet, 62),
         versionNotes = getFormattedOption(datasetSheet, 63),
         wasGeneratedBy = getFormattedOption(datasetSheet, 64).map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq),
-        purpose = getFormattedOption(datasetSheet, 65)
+        purpose = getFormattedOption(datasetSheet, 65),
+        legalBasis = getFormattedOption(datasetSheet, 66),
+        structuredData = toBooleanOption(getCellStr(datasetSheet, 75), "Dataset.structuredData"),
+        existing = toBooleanOption(getCellStr(datasetSheet, 76), "Dataset.existing"),
+        uri = getFormattedOption(datasetSheet, 77)
       ),
       distribution = DistributionMetadataUserInput(
         title = getFormattedOption(distSheet, 1),
@@ -881,20 +926,27 @@ object MetadataUserInput {
           val v = getFormattedOption(distSheet, 7)
           if(alg.isDefined && v.isDefined) Some(Checksum(alg.get, v.get)) else None
         },
-        description = getFormattedOption(distSheet, 8),
-        format = getFormattedOption(distSheet, 9),
-        license = getFormattedOption(distSheet, 10),
-        mediaType = getFormattedOption(distSheet, 11),
-        packagingFormat = getFormattedOption(distSheet, 12),
-        releaseDate = getFormattedOption(distSheet, 13),
-        rights = getFormattedOption(distSheet, 14),
-        spatialResolution = Try(getCellStr(distSheet, 15).toDouble).toOption,
-        status = getFormattedOption(distSheet, 16),
-        temporalResolution = getFormattedOption(distSheet, 17),
-        accessService = getFormattedOption(distSheet, 18)
+        description = getFormattedOption(distSheet, 9),
+        format = getFormattedOption(distSheet, 12),
+        license = getFormattedOption(distSheet, 17),
+        mediaType = getFormattedOption(distSheet, 19),
+        packagingFormat = getFormattedOption(distSheet, 21),
+        releaseDate = getFormattedOption(distSheet, 22),
+        rights = getFormattedOption(distSheet, 23),
+        spatialResolution = Try(getCellStr(distSheet, 24).toDouble).toOption,
+        status = getFormattedOption(distSheet, 25),
+        temporalResolution = getFormattedOption(distSheet, 26),
+        accessService = getFormattedOption(distSheet, 27),
+        language = getFormattedOption(distSheet, 16),
+        documentation = getFormattedOption(distSheet, 10),
+        compressionFormat = getFormattedOption(distSheet, 8),
+        downloadURL = getFormattedOption(distSheet, 11),
+        linkedSchemas = getFormattedOption(distSheet, 18),
+        modificationDate = getFormattedOption(distSheet, 20),
+        obligation = getFormattedOption(distSheet, 15)
       ),
-      dataDictionary = if (dataDictionarySheet != null && dataDictionarySheet.getLastRowNum > 1)
-        Some((1 until dataDictionarySheet.getLastRowNum).flatMap(row => {
+      dataDictionary = if (dataDictionarySheet != null && dataDictionarySheet.getLastRowNum >= 1)
+        Some((1 to dataDictionarySheet.getLastRowNum).flatMap(row => {
           val r = dataDictionarySheet.getRow(row)
           if (r == null) None
           else {

@@ -12,7 +12,7 @@ object CSVW {
   final val titles = m.createProperty(NS + "titles")
   final val datatype = m.createProperty(NS + "datatype")
   final val separator = m.createProperty(NS + "separator")
-  final val propertyURL = m.createProperty(NS + "propertyURL")
+  final val propertyUrl = m.createProperty(NS + "propertyUrl")
   final val table = m.createProperty(NS + "table")
   final val column = m.createProperty(NS + "column")
   final val primaryKey = m.createProperty(NS + "primaryKey")

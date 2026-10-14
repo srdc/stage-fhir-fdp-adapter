@@ -112,10 +112,28 @@ object CommandLineArgumentParser {
           .text("Half-width around --reference, as an ISO-8601 duration (e.g. P30D, P6M, P1Y). " +
             "Resolved into [reference - window, reference + window]."),
 
+        opt[Unit]("keep-drafts")
+          .action((_, c) => c.copy(keepDrafts = true))
+          .text("Leave published FDP resources in DRAFT state. By default every created resource is " +
+            "moved to PUBLISHED, which is also required before a resource can be updated."),
+
+        opt[String]("dataset-uri")
+          .action((x, c) => c.copy(datasetUri = Some(x.trim).filter(_.nonEmpty)))
+          .text("Attach this run's Data Dictionary to an existing Dataset instead of creating a " +
+            "new Catalog, Dataset and Distribution. Takes the Dataset's FDP URI, e.g. " +
+            "http://localhost:8080/dataset/<uuid>. Overrides dataset.existing/dataset.uri in the " +
+            "metadata configuration."),
+
         opt[String]("vocab-base")
           .action((x, c) => c.copy(vocabBase = x.trim.replaceAll("/+$", "")))
           .text("Base URI for SKOS schemes and CSVW propertyUrl values. " +
-            "Default: http://stage-healthyageing.eu/fdp/vocab")
+            "Default: http://stage-healthyageing.eu/fdp/vocab"),
+
+        opt[Boolean]("exportFhirBundles")
+          .action((x, c) => c.copy(exportFhirBundles = x))
+          .text("Export a FHIR transaction bundle (Patient, Observation, QuestionnaireResponse, " +
+            "Questionnaire) from the source FHIR server. Independent of --job: it needs no 'bundle' job " +
+            "and no job-specific config. Requires a FHIR server. Default: false.")
       )
     }
 
