@@ -80,6 +80,42 @@ Descriptive FAIR metadata (Catalog details, Publisher, Access Rights, etc.) is i
 * **`json`**: Automatically loads metadata from the configured `config.json` file.
 * **`excel`**: Automatically loads metadata from the configured `config.xlsx` file.
 
+### 3. Organizations (shared agents)
+
+Publisher, creator, HDAB and qualified-attribution details are entered **once**, on the `Organizations` sheet (Excel) or in the top-level `organizations` array (JSON). Everywhere else you write only an `Organization ID`.
+
+| Column | Required | Emitted as |
+| --- | --- | --- |
+| `Organization ID` | yes | the reference key (e.g. `OULU`) |
+| `Name` | yes | `foaf:name` |
+| `Canonical IRI` | recommended | the entity's subject IRI (ROR / Wikidata / homepage) |
+| `Type` | no | `dct:type` |
+| `Contact Page` | publisher/HDAB | `vcard:hasURL` |
+| `Contact Email` | publisher/HDAB | `vcard:hasEmail` |
+| `Homepage` | no | `foaf:homepage` |
+| `Description` | no | `dct:description` |
+| `Trusted Data Holder` | no | `healthdcatap:trustedDataHolder` |
+| `Other Identifiers` | no | `dct:identifier` (+ `owl:sameAs` for dereferenceable ones) |
+
+The reference goes in the existing **name** cell of each agent block - Catalog `creator` / `publisher`, Dataset `health data access body` / `publisher` / `creator` / `qualified attribution`. The child rows below each of those (contact page/email, type, note, trusted) are left blank and labelled `FROM Organizations sheet`; they are no longer read.
+
+**JSON** - declare `organizations` at the top level, next to `catalog`, and reference it with `publisherRef`, `creatorRef`, `hdabRef` (and by id inside `qualifiedAttribution`):
+
+```json
+{
+  "organizations": [
+    { "id": "SRDC", "name": "SRDC Software Research & Development and Consultancy Corp.",
+      "iri": "https://www.srdc.com.tr",
+      "contactPoint": { "page": "https://www.srdc.com.tr/contact/", "email": "info@srdc.com.tr" },
+      "trusted": true }
+  ],
+  "catalog": { "publisherRef": "SRDC", "creatorRef": "SRDC" },
+  "jobs": { "survey": { "dataset": { "publisherRef": "SRDC", "hdabRef": "SRDC", "creatorRef": "SRDC" } } }
+}
+```
+
+**Browser** - the form opens with an `Organizations` section; add a row per organisation, then pick it from the dropdown on each agent field. The HDAB dropdown is mandatory. In a multi-job run the organisations are entered on the first job's form and inherited by the rest.
+
 ---
 
 ## Usage
@@ -110,6 +146,7 @@ You can customize the job type, output format, configuration mode, and directly 
 | `--date-to` | *(none)* | Upper bound (inclusive) for the FHIR search window. Same accepted formats. |
 | `--reference` | *(none)* | Anchor date for a centered window. Must be paired with `--window`. |
 | `--window` | *(none)* | Half-width around `--reference`, given as an ISO-8601 duration: `P30D`, `P6M`, `P1Y`, `PT12H`, etc. Resolved into `[reference - window, reference + window]`. |
+| `--vocab-base` | `http://stage-healthyageing.eu/fdp/vocab` | Base URI for SKOS scheme/concept URIs and CSVW `propertyUrl` values emitted in `CSVW.ttl`. Trailing slashes are stripped. |
 
 ### Time-window filter
 
@@ -154,8 +191,6 @@ The `--date-from` / `--date-to` / `--reference` / `--window` flags apply here as
 ```
 
 The bundle job produces neither CSV nor RDF — its only output is `bundle.json`.
-
----
 
 ## Output
 
