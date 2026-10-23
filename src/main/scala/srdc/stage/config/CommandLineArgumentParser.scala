@@ -114,8 +114,8 @@ object CommandLineArgumentParser {
 
         opt[Unit]("keep-drafts")
           .action((_, c) => c.copy(keepDrafts = true))
-          .text("Leave published FDP resources in DRAFT state. By default every created resource is " +
-            "moved to PUBLISHED, which is also required before a resource can be updated."),
+          .text("Leave the created FDP resources in DRAFT state. By default every created resource is " +
+            "moved to PUBLISHED."),
 
         opt[String]("dataset-uri")
           .action((x, c) => c.copy(datasetUri = Some(x.trim).filter(_.nonEmpty)))

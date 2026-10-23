@@ -414,14 +414,13 @@ object MetadataWriter {
     val localDistributionUri = if (isFdpMode) None else Some(initialDistUri)
 
     // 2. Dataset (Uses Job-Specific Stats)
-    var datasetPublished = false
     val finalDatasetUri = if (isFdpMode) {
       logger.info("Creating NEW Dataset on FDP...")
       val datasetModel = createDatasetModel(meta, jobStats, finalCatalogUri, "", runMode, registry,
         variablesUri = None, structuredData = structuredData)
       val loc = postToFdp(fdpUrl, fdpEmail, fdpPassword, "dataset", datasetModel)
       logger.info("Dataset created at: {}", loc)
-      datasetPublished = publish(loc, fdpEmail, fdpPassword, fdpUrl, keepDrafts)
+      publish(loc, fdpEmail, fdpPassword, fdpUrl, keepDrafts)
       loc
     } else {
       s"urn:uuid:${UUID.randomUUID()}"
@@ -473,25 +472,9 @@ object MetadataWriter {
       logger.info("CSVW created at: {}", csvwUri)
       publish(csvwUri, fdpEmail, fdpPassword, fdpUrl, keepDrafts)
 
-      // 5. Link the variables back to the Dataset
-      if (hasVariableDescription && !datasetPublished) {
-        logger.warn("Dataset {} is still in DRAFT, so healthdcatap:hasVariables cannot be attached " +
-          "(the FDP refuses updates on drafts). Publish it and re-run, or drop --keep-drafts.", finalDatasetUri)
-      }
-      if (hasVariableDescription && datasetPublished) {
-        try {
-          val updated = createDatasetModel(meta, jobStats, finalCatalogUri, finalDatasetUri, runMode, registry,
-            variablesUri = Some(csvwUri), structuredData = structuredData, distributionUri = Some(finalDistUri))
-          FdpClient.putResource(finalDatasetUri, updated, fdpEmail, fdpPassword, fdpUrl)
-          saveLocalFile(outputDir, "Dataset", updated)
-          logger.info("Dataset updated with healthdcatap:hasVariables -> {}", csvwUri)
-        } catch {
-          case e: Throwable =>
-            // The four layers are already published; losing the back-link is not worth failing the run.
-            logger.warn("Could not add healthdcatap:hasVariables to the Dataset ({}). " +
-              "Catalog, Dataset, Distribution and CSVW are published. Cause: {}", finalDatasetUri, e.getMessage)
-        }
-      }
+      saveLocalFile(outputDir, "Dataset", createDatasetModel(meta, jobStats, finalCatalogUri, finalDatasetUri,
+        runMode, registry, variablesUri = Some(csvwUri).filter(_ => hasVariableDescription),
+        structuredData = structuredData, distributionUri = Some(finalDistUri)))
       logger.info("Metadata Generation and FDP Validations are Successfully Completed")
     } else {
       logger.info("Metadata Generation is Successfully Completed")
